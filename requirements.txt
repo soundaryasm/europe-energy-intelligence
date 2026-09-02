@@ -1,0 +1,4 @@
+requests
+PyYAML
+psycopg[binary]
+pytest
