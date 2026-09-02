@@ -1,0 +1,157 @@
+"""HTTP client for the Open-Meteo Historical Weather API (Spec 001).
+
+This module only handles network I/O, request construction, and response
+validation. It has no PySpark/Delta dependency so it can be exercised
+entirely with plain Python and `unittest.mock` in tests, on or off
+Databricks.
+"""
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass
+from datetime import date
+from typing import Any, Callable, Mapping, Optional
+
+import requests
+
+logger = logging.getLogger(__name__)
+
+OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
+
+# Open-Meteo does not currently expose daily mean temperature/wind speed as
+# documented daily variables, so hourly values are retrieved and averaged
+# downstream in Silver (Spec 003). Solar radiation is available directly as
+# a daily variable.
+HOURLY_VARIABLES = ("temperature_2m", "wind_speed_10m")
+DAILY_VARIABLES = ("shortwave_radiation_sum",)
+
+DEFAULT_TIMEOUT_SECONDS = 30
+DEFAULT_MAX_RETRIES = 3
+DEFAULT_RETRY_BACKOFF_SECONDS = 2.0
+
+# Transient failures are worth a bounded retry; client errors (bad request,
+# auth, not found, etc.) are not, and must fail fast and visibly instead.
+_RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+
+
+class OpenMeteoAPIError(RuntimeError):
+    """Raised when the Open-Meteo API cannot be used to produce trustworthy data."""
+
+
+@dataclass(frozen=True)
+class OpenMeteoRequest:
+    country_code: str
+    latitude: float
+    longitude: float
+    timezone: str
+    start_date: date
+    end_date: date
+
+
+def _build_params(request: OpenMeteoRequest) -> dict:
+    return {
+        "latitude": request.latitude,
+        "longitude": request.longitude,
+        "start_date": request.start_date.isoformat(),
+        "end_date": request.end_date.isoformat(),
+        "hourly": ",".join(HOURLY_VARIABLES),
+        "daily": ",".join(DAILY_VARIABLES),
+        "timezone": request.timezone,
+    }
+
+
+def _validate_response_payload(payload: Any, request: OpenMeteoRequest) -> None:
+    if not isinstance(payload, Mapping):
+        raise OpenMeteoAPIError(
+            f"Open-Meteo response for {request.country_code} was not a JSON object."
+        )
+
+    if payload.get("error"):
+        reason = payload.get("reason", "unknown error")
+        raise OpenMeteoAPIError(
+            f"Open-Meteo API reported an error for {request.country_code}: {reason}"
+        )
+
+    for section, required_vars in (("hourly", HOURLY_VARIABLES), ("daily", DAILY_VARIABLES)):
+        section_payload = payload.get(section)
+        if not isinstance(section_payload, Mapping) or "time" not in section_payload:
+            raise OpenMeteoAPIError(
+                f"Open-Meteo response for {request.country_code} is missing '{section}.time'."
+            )
+        for variable in required_vars:
+            if variable not in section_payload:
+                raise OpenMeteoAPIError(
+                    f"Open-Meteo response for {request.country_code} is missing "
+                    f"'{section}.{variable}'."
+                )
+
+
+def fetch_weather(
+    request: OpenMeteoRequest,
+    *,
+    session: Optional[Any] = None,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    max_retries: int = DEFAULT_MAX_RETRIES,
+    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> dict:
+    """Fetch raw historical weather data for one country/date range.
+
+    Transient network errors and 5xx/429/408 responses are retried a
+    bounded number of times. Non-retryable HTTP errors and structurally
+    invalid responses raise `OpenMeteoAPIError` immediately, so callers
+    never silently persist incomplete data.
+    """
+    http = session or requests
+    params = _build_params(request)
+    total_attempts = max_retries + 1
+
+    logger.info(
+        "Requesting Open-Meteo weather: country=%s start=%s end=%s",
+        request.country_code,
+        request.start_date,
+        request.end_date,
+    )
+
+    last_error: Optional[Exception] = None
+    for attempt in range(1, total_attempts + 1):
+        try:
+            response = http.get(OPEN_METEO_ARCHIVE_URL, params=params, timeout=timeout)
+        except requests.exceptions.RequestException as exc:
+            last_error = exc
+            logger.warning(
+                "Open-Meteo request failed for %s (attempt %s/%s): %s",
+                request.country_code, attempt, total_attempts, exc,
+            )
+            if attempt < total_attempts:
+                sleep_fn(retry_backoff_seconds)
+                continue
+            raise OpenMeteoAPIError(
+                f"Open-Meteo request for {request.country_code} failed after "
+                f"{total_attempts} attempts: {exc}"
+            ) from exc
+
+        if response.status_code == 200:
+            payload = response.json()
+            _validate_response_payload(payload, request)
+            return payload
+
+        if response.status_code in _RETRYABLE_STATUS_CODES and attempt < total_attempts:
+            logger.warning(
+                "Open-Meteo request returned status %s for %s (attempt %s/%s); retrying.",
+                response.status_code, request.country_code, attempt, total_attempts,
+            )
+            sleep_fn(retry_backoff_seconds)
+            continue
+
+        raise OpenMeteoAPIError(
+            f"Open-Meteo request for {request.country_code} failed with status "
+            f"{response.status_code}: {response.text[:500]}"
+        )
+
+    # Unreachable: the loop above always returns or raises.
+    raise OpenMeteoAPIError(
+        f"Open-Meteo request for {request.country_code} failed after "
+        f"{total_attempts} attempts: {last_error}"
+    )

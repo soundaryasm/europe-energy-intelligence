@@ -1,0 +1,40 @@
+# MVP country reference configuration (Spec 001).
+#
+# Coordinates and other country metadata are defined here once so they are
+# never duplicated inside ingestion logic. The reference location is the
+# capital city, used as an MVP proxy for national weather.
+countries:
+  - country_code: IE
+    country_name: Ireland
+    reference_location: Dublin
+    latitude: 53.3498
+    longitude: -6.2603
+    timezone: Europe/Dublin
+
+  - country_code: DE
+    country_name: Germany
+    reference_location: Berlin
+    latitude: 52.5200
+    longitude: 13.4050
+    timezone: Europe/Berlin
+
+  - country_code: FR
+    country_name: France
+    reference_location: Paris
+    latitude: 48.8566
+    longitude: 2.3522
+    timezone: Europe/Paris
+
+  - country_code: ES
+    country_name: Spain
+    reference_location: Madrid
+    latitude: 40.4168
+    longitude: -3.7038
+    timezone: Europe/Madrid
+
+  - country_code: NL
+    country_name: Netherlands
+    reference_location: Amsterdam
+    latitude: 52.3676
+    longitude: 4.9041
+    timezone: Europe/Amsterdam

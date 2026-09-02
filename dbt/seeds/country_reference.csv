@@ -1,0 +1,6 @@
+country_code,country_name,reference_location,latitude,longitude,timezone,entsoe_domain
+IE,Ireland,Dublin,53.3498,-6.2603,Europe/Dublin,10Y1001A1001A59C
+DE,Germany,Berlin,52.5200,13.4050,Europe/Berlin,10Y1001A1001A82H
+FR,France,Paris,48.8566,2.3522,Europe/Paris,10YFR-RTE------C
+ES,Spain,Madrid,40.4168,-3.7038,Europe/Madrid,10YES-REE------0
+NL,Netherlands,Amsterdam,52.3676,4.9041,Europe/Amsterdam,10YNL----------L

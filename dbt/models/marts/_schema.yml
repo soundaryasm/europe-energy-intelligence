@@ -1,0 +1,155 @@
+version: 2
+
+models:
+  - name: dim_country
+    description: >
+      One row per MVP country (Spec 004), sourced from the
+      country_reference seed. Country dimension for all facts.
+    columns:
+      - name: country_key
+        description: Stable natural key (upper-cased ISO country code).
+        tests:
+          - unique
+          - not_null
+      - name: country_code
+        tests:
+          - unique
+          - not_null
+      - name: country_name
+        tests:
+          - not_null
+      - name: reference_location
+        tests:
+          - not_null
+      - name: timezone
+        tests:
+          - not_null
+      - name: entsoe_domain
+        tests:
+          - not_null
+
+  - name: dim_date
+    description: >
+      One row per calendar date covering the configured historical
+      backfill and future range (Spec 004; range set via dbt vars
+      dim_date_start_date/dim_date_end_date in dbt_project.yml).
+    columns:
+      - name: date_key
+        description: Deterministic yyyyMMdd integer key.
+        tests:
+          - unique
+          - not_null
+      - name: date
+        tests:
+          - unique
+          - not_null
+
+  - name: fact_energy_daily
+    description: >
+      Daily electricity demand, day-ahead price statistics, and
+      renewable-generation percentage per country (Spec 004).
+      Grain: country + date. Negative prices are valid and are not
+      constrained here.
+    columns:
+      - name: country_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_country')
+              field: country_key
+      - name: date_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_key
+      - name: daily_demand_mwh
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: total_generation_mwh
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: renewable_generation_pct
+        description: NULL on days with no generation data, never a fabricated 0.
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+              inclusive: true
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - country_key
+            - date_key
+
+  - name: fact_weather_daily
+    description: >
+      Daily weather aggregates per country (Spec 004). Grain: country + date.
+    columns:
+      - name: country_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_country')
+              field: country_key
+      - name: date_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_key
+      - name: avg_wind_speed_kmh
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: solar_radiation_mj_m2
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - country_key
+            - date_key
+
+  - name: fact_generation_mix_daily
+    description: >
+      Daily generation per country/normalized production type (Spec 004).
+      Grain: country + date + production_type.
+    columns:
+      - name: country_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_country')
+              field: country_key
+      - name: date_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_key
+      - name: production_type
+        tests:
+          - not_null
+      - name: generation_mwh
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: renewable_flag
+        tests:
+          - not_null
+      - name: generation_share_pct
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+              inclusive: true
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - country_key
+            - date_key
+            - production_type

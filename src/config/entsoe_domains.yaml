@@ -1,0 +1,31 @@
+# ENTSO-E bidding-zone/domain (EIC) codes for the MVP countries (Spec 002).
+#
+# SOURCE: publicly documented ENTSO-E Transparency Platform domain codes.
+# STATUS: NOT independently re-verified against a live ENTSO-E account/API
+# in this environment (no API credentials are available here). Every entry
+# is marked `validated: false` until someone with ENTSO-E API access
+# confirms it against a real request/response.
+#
+# Spec 002: "Codes must be validated against ENTSO-E before being
+# committed to production configuration." Treat `validated: false` as an
+# open blocker, not a soft warning.
+domains:
+  - country_code: IE
+    domain: "10Y1001A1001A59C"  # Ireland (SEM) bidding zone
+    validated: false
+
+  - country_code: DE
+    domain: "10Y1001A1001A82H"  # Germany-Luxembourg (DE-LU) bidding zone
+    validated: false
+
+  - country_code: FR
+    domain: "10YFR-RTE------C"
+    validated: false
+
+  - country_code: ES
+    domain: "10YES-REE------0"
+    validated: false
+
+  - country_code: NL
+    domain: "10YNL----------L"
+    validated: false

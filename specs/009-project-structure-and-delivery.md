@@ -242,7 +242,7 @@ ENTSO-E          Open-Meteo
              ↓
           dbt Gold
              ↓
-     Aiven PostgreSQL
+        PostgreSQL
              ↓
           Power BI
 ```
@@ -317,7 +317,7 @@ The project MVP is complete when:
 4. Bronze, Silver, and Gold datasets exist in Databricks.
 5. PySpark performs approved transformations.
 6. dbt builds and tests Gold models.
-7. Gold serving data reaches Aiven PostgreSQL.
+7. Gold serving data reaches PostgreSQL.
 8. Databricks Jobs orchestrates the pipeline.
 9. Critical quality failures block serving publication.
 10. Power BI consumes PostgreSQL successfully.

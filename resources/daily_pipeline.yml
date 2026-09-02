@@ -1,0 +1,117 @@
+# Daily pipeline job definition (Spec 006).
+#
+# NOT VALIDATED against a real Databricks workspace — see databricks.yml
+# header. Task DAG, schedule, and retry policy follow
+# specs/006-daily-orchestration.md; review the `warehouse_id` variable
+# and notebook paths before deploying.
+
+variables:
+  sql_warehouse_id:
+    description: "Databricks SQL Warehouse ID used by the build_dbt_gold task."
+  postgres_secret_scope:
+    description: "Databricks secret scope holding PostgreSQL credentials."
+    default: postgres
+  entsoe_secret_scope:
+    description: "Databricks secret scope holding the ENTSO-E API token."
+    default: entsoe
+
+resources:
+  jobs:
+    europe_energy_intelligence_daily:
+      name: "European Energy Intelligence - Daily Pipeline"
+
+      # Spec 006: run once daily at 02:00 Europe/Dublin, timezone
+      # explicit so this does not depend on any local machine's clock.
+      schedule:
+        quartz_cron_expression: "0 0 2 * * ?"
+        timezone_id: "Europe/Dublin"
+        pause_status: UNPAUSED
+
+      # A scheduled run always uses mode=daily (Spec 006: "The scheduled
+      # daily workflow must not accidentally trigger a full 24-month
+      # backfill."). Backfill/reprocess runs are triggered manually with
+      # these parameters overridden.
+      parameters:
+        - name: mode
+          default: "daily"
+        - name: start_date
+          default: ""
+        - name: end_date
+          default: ""
+
+      tasks:
+        - task_key: ingest_open_meteo
+          notebook_task:
+            notebook_path: "${workspace.file_path}/notebooks/ingestion/open_meteo_ingestion"
+            base_parameters:
+              mode: "{{job.parameters.mode}}"
+              start_date: "{{job.parameters.start_date}}"
+              end_date: "{{job.parameters.end_date}}"
+          timeout_seconds: 3600
+          max_retries: 2
+          min_retry_interval_millis: 300000 # 5 minutes
+          retry_on_timeout: true
+
+        - task_key: ingest_entsoe
+          notebook_task:
+            notebook_path: "${workspace.file_path}/notebooks/ingestion/entsoe_ingestion"
+            base_parameters:
+              mode: "{{job.parameters.mode}}"
+              start_date: "{{job.parameters.start_date}}"
+              end_date: "{{job.parameters.end_date}}"
+              secret_scope: "${var.entsoe_secret_scope}"
+          timeout_seconds: 3600
+          max_retries: 2
+          min_retry_interval_millis: 300000
+          retry_on_timeout: true
+
+        # Silver must not start until BOTH ingestion tasks succeed
+        # (implicit ALL_SUCCESS run_if — Spec 006 "Failure Behaviour").
+        - task_key: transform_silver
+          depends_on:
+            - task_key: ingest_open_meteo
+            - task_key: ingest_entsoe
+          notebook_task:
+            notebook_path: "${workspace.file_path}/notebooks/transformations/transform_silver"
+          timeout_seconds: 3600
+          max_retries: 1
+          min_retry_interval_millis: 300000
+
+        # dbt must not run until Silver succeeds.
+        - task_key: build_dbt_gold
+          depends_on:
+            - task_key: transform_silver
+          dbt_task:
+            project_directory: "${workspace.file_path}/dbt"
+            # Spec 004: dbt-databricks only, pinned explicitly here (not
+            # via the repo's shared requirements.txt), never dbt-spark.
+            commands:
+              - "dbt deps"
+              - "dbt seed"
+              - "dbt run"
+              - "dbt test"
+            warehouse_id: "${var.sql_warehouse_id}"
+          timeout_seconds: 3600
+          max_retries: 1
+          min_retry_interval_millis: 300000
+          libraries:
+            - pypi:
+                package: "dbt-databricks==1.8.5" # pin/confirm against the target Databricks Runtime before first deploy
+
+        # Spec 007 data-quality gate: publish only runs if dbt (and its
+        # tests) succeeded — a failed/known-invalid Gold build never
+        # reaches the serving layer.
+        - task_key: publish_postgres
+          depends_on:
+            - task_key: build_dbt_gold
+          notebook_task:
+            notebook_path: "${workspace.file_path}/notebooks/serving/publish_postgres"
+            base_parameters:
+              gold_catalog: "main.gold" # confirm against the real Unity Catalog layout before deploy
+              secret_scope: "${var.postgres_secret_scope}"
+          timeout_seconds: 1800
+          max_retries: 2
+          min_retry_interval_millis: 300000
+          retry_on_timeout: true
+
+      email_notifications: {}

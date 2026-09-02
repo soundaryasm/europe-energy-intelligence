@@ -1,0 +1,6 @@
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+markers = [
+    "databricks: real PySpark transformation tests. Skipped automatically wherever PySpark is not installed (see tests/conftest.py); must be run on Databricks or another PySpark-enabled environment to actually execute.",
+]

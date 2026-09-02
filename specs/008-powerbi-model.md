@@ -1,8 +1,29 @@
 # 008 — Power BI Model
 
+## Scope Note
+
+This specification exists to document the **end-to-end picture**: what a
+BI consumer of this project's PostgreSQL serving layer looks like, so
+the overall architecture (API -> Databricks -> PySpark -> dbt ->
+PostgreSQL -> BI) is legible as a whole.
+
+**Power BI itself is out of scope for this repository.** It is built and
+maintained separately, by whoever owns the BI layer, against the
+PostgreSQL contract defined in Spec 005. This repository's delivery ends
+at PostgreSQL serving — nothing here builds, deploys, or ships a
+Power BI report, `.pbix` file, or dataset.
+
+The remainder of this document describes the semantic model, measures,
+and pages a downstream Power BI consumer *should* build against the
+serving layer, as a reference contract — not as work this repository is
+responsible for delivering.
+
 ## Goal
 
-Build a Power BI semantic model and dashboard on top of the Aiven PostgreSQL serving layer.
+Describe a Power BI semantic model and dashboard built on top of the
+PostgreSQL serving layer, for context on the end-to-end picture. Building
+this (in Power BI Desktop, against a live PostgreSQL connection) is a
+separate, downstream effort — see "Scope Note" above.
 
 Power BI is the final consumption layer.
 
@@ -10,7 +31,7 @@ It must not connect directly to Databricks Bronze, Silver, or Gold datasets.
 
 ## Source
 
-Power BI must connect to Aiven PostgreSQL.
+Power BI must connect to PostgreSQL.
 
 Approved serving tables:
 
@@ -291,7 +312,7 @@ API data
 
 This specification is complete when:
 
-1. Power BI connects successfully to Aiven PostgreSQL.
+1. Power BI connects successfully to PostgreSQL.
 2. All approved serving tables are loaded.
 3. Dimension/fact relationships are configured correctly.
 4. Core reusable measures exist.
@@ -310,6 +331,9 @@ This specification is complete when:
 
 This specification does not include:
 
+- building, deploying, or maintaining the actual Power BI report/`.pbix`
+  from this repository (see "Scope Note" above — that is a separate,
+  downstream effort)
 - Power BI Premium
 - Fabric
 - streaming dashboards

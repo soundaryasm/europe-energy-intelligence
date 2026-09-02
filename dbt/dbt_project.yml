@@ -1,0 +1,33 @@
+name: "europe_energy_intelligence"
+version: "1.0.0"
+config-version: 2
+
+# Spec 004: dbt executes against Databricks only, via a Lakeflow Jobs
+# `dbt` task pinning dbt-databricks (never dbt-spark, never the shared
+# requirements.txt). This project is authored/edited locally but has not
+# been run anywhere in this environment — no Databricks SQL Warehouse or
+# credentials are available here. See specs/004-dbt-gold-models.md.
+profile: "europe_energy_intelligence"
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+vars:
+  # Historical coverage for dim_date. Parameterized, not hard-coded
+  # in SQL, so it can be widened without editing the model (Spec 004
+  # "dim_date... should cover at least the full historical backfill
+  # range and ongoing future daily loads").
+  dim_date_start_date: "2022-01-01"
+  dim_date_end_date: "2027-12-31"
+
+models:
+  europe_energy_intelligence:
+    +materialized: table
+    marts:
+      +schema: gold

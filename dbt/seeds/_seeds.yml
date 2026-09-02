@@ -1,0 +1,28 @@
+version: 2
+
+seeds:
+  - name: country_reference
+    description: >
+      MVP country reference data feeding dim_country (Spec 004). This is
+      dbt's native way to version a small static table, but it duplicates
+      values that also live in src/config/countries.yaml and
+      src/config/entsoe_domains.yaml (the Python ingestion side's sources
+      of truth). KNOWN MAINTENANCE RISK: there is no automated sync
+      between this seed and those YAML files — if one changes, update the
+      other by hand, or the Gold country dimension and the ingestion
+      config will disagree.
+    columns:
+      - name: country_code
+        tests: [unique, not_null]
+      - name: country_name
+        tests: [not_null]
+      - name: reference_location
+        tests: [not_null]
+      - name: latitude
+        tests: [not_null]
+      - name: longitude
+        tests: [not_null]
+      - name: timezone
+        tests: [not_null]
+      - name: entsoe_domain
+        tests: [not_null]

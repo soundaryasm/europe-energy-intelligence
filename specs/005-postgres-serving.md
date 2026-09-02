@@ -2,7 +2,7 @@
 
 ## Goal
 
-Publish curated Gold datasets from Databricks into Aiven PostgreSQL for downstream consumption by Power BI.
+Publish curated Gold datasets from Databricks into PostgreSQL for downstream consumption by Power BI.
 
 PostgreSQL acts only as the serving layer.
 
@@ -33,7 +33,10 @@ Publish only the approved Gold models:
 
 ## Target Database
 
-Use Aiven PostgreSQL.
+Use PostgreSQL. The hosting provider is not prescribed by this
+specification — any standard, network-reachable PostgreSQL instance
+(managed or self-hosted) that meets the connection, SSL, and storage
+requirements below is acceptable.
 
 Database credentials must be retrieved securely at runtime.
 
@@ -340,7 +343,7 @@ If PostgreSQL publication fails:
 
 This specification is complete when:
 
-1. Databricks can connect securely to Aiven PostgreSQL.
+1. Databricks can connect securely to PostgreSQL.
 2. All five approved serving tables exist.
 3. Initial 24-month Gold history can be published.
 4. Daily incremental publishing works.

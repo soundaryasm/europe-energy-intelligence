@@ -18,7 +18,7 @@ External APIs
 → Databricks Bronze
 → Databricks Silver
 → dbt Gold models
-→ Aiven PostgreSQL
+→ PostgreSQL
 → Power BI
 
 ## Runtime Constraints
@@ -67,7 +67,9 @@ Use Delta tables for persisted Databricks datasets.
 
 ### PostgreSQL
 
-Aiven PostgreSQL is a serving layer only.
+PostgreSQL is a serving layer only. The hosting provider is not
+prescribed — any standard PostgreSQL instance (managed or self-hosted)
+is acceptable.
 
 Do not store raw or Silver datasets in PostgreSQL.
 

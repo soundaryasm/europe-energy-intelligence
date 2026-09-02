@@ -1,0 +1,65 @@
+version: 2
+
+# Silver Delta tables produced by src/transformations (Spec 003) are
+# declared as dbt sources here so Gold models never query Bronze
+# directly and lineage stays expressed through ref()/source(), not
+# hard-coded execution order (Spec 004 "Lineage").
+#
+# `schema` is parameterized via the dbt target/profile (see
+# ../profiles.yml.example) rather than hard-coded, so the same project
+# works against dev/prod catalogs without editing SQL.
+sources:
+  - name: silver
+    schema: "{{ target.schema | default('silver') }}"
+    tables:
+      - name: silver_energy_demand_daily
+        description: >
+          Daily electricity demand (MWh) per country, produced by
+          src/transformations/silver_energy_demand.py (Spec 003).
+        columns:
+          - name: country_code
+          - name: local_date
+          - name: daily_demand_mwh
+          - name: source_interval_count
+          - name: source_system
+
+      - name: silver_energy_price_daily
+        description: >
+          Daily day-ahead electricity price statistics (EUR/MWh) per
+          country, produced by src/transformations/silver_energy_price.py
+          (Spec 003).
+        columns:
+          - name: country_code
+          - name: local_date
+          - name: avg_day_ahead_price_eur_mwh
+          - name: min_day_ahead_price_eur_mwh
+          - name: max_day_ahead_price_eur_mwh
+          - name: source_interval_count
+          - name: source_system
+
+      - name: silver_generation_mix_daily
+        description: >
+          Daily generation (MWh) per country/normalized production type,
+          produced by src/transformations/silver_generation_mix.py
+          (Spec 003).
+        columns:
+          - name: country_code
+          - name: local_date
+          - name: normalized_production_type
+          - name: renewable_flag
+          - name: generation_mwh
+          - name: production_type_raw_codes
+          - name: source_system
+
+      - name: silver_weather_daily
+        description: >
+          Daily weather aggregates per country/reference location,
+          produced by src/transformations/silver_weather.py (Spec 003).
+        columns:
+          - name: country_code
+          - name: local_date
+          - name: avg_temperature_c
+          - name: avg_wind_speed_kmh
+          - name: solar_radiation_mj_m2
+          - name: reference_location
+          - name: source_system
