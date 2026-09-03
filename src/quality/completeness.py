@@ -56,35 +56,45 @@ def classify_entsoe_completeness(
     """Classify each attempted country from an ENTSO-E `IngestionResult`.
 
     COMPLETE only if every dataset in `required_datasets` succeeded for
-    that country; PARTIALLY_AVAILABLE if some but not all did; FAILED if
-    none did.
+    that country. PARTIALLY_AVAILABLE if some (not all) succeeded,
+    regardless of whether the rest are `failed` or `unavailable` — some
+    real data exists either way. If none succeeded: FAILED if at least
+    one required dataset genuinely failed (a technical failure is more
+    severe than mere unavailability); otherwise UNAVAILABLE (every
+    missing dataset was a legitimate ENTSO-E "no matching data" response,
+    not a broken request — Spec 006 "Partial Source Data" / Spec 007
+    "Source Availability").
     """
     required = set(required_datasets)
     classification: Dict[str, CountryCompleteness] = {}
 
-    for country in result.countries_attempted:
-        succeeded_datasets = {
-            key.split(":", 1)[1] for key in result.succeeded if key.startswith(f"{country}:")
-        }
-        failed_datasets = {
-            key.split(":", 1)[1] for key in result.failed if key.startswith(f"{country}:")
-        }
-        matched_success = succeeded_datasets & required
-        matched_failure = failed_datasets & required
+    def _datasets(attempt_keys, country: str) -> set:
+        return {
+            key.split(":", 1)[1] for key in attempt_keys if key.startswith(f"{country}:")
+        } & required
 
-        if matched_success == required:
+    for country in result.countries_attempted:
+        succeeded_datasets = _datasets(result.succeeded, country)
+        unavailable_datasets = _datasets(result.unavailable, country)
+        failed_datasets = _datasets(result.failed, country)
+
+        if succeeded_datasets == required:
             classification[country] = CountryCompleteness(country, CompletenessStatus.COMPLETE)
-        elif matched_success:
+        elif succeeded_datasets:
+            missing = sorted(failed_datasets | unavailable_datasets)
             classification[country] = CountryCompleteness(
-                country,
-                CompletenessStatus.PARTIALLY_AVAILABLE,
-                f"missing datasets: {sorted(matched_failure)}",
+                country, CompletenessStatus.PARTIALLY_AVAILABLE, f"missing datasets: {missing}"
+            )
+        elif failed_datasets:
+            missing = sorted(failed_datasets | unavailable_datasets)
+            classification[country] = CountryCompleteness(
+                country, CompletenessStatus.FAILED, f"missing datasets: {missing}"
             )
         else:
             classification[country] = CountryCompleteness(
                 country,
-                CompletenessStatus.FAILED,
-                f"missing datasets: {sorted(matched_failure)}",
+                CompletenessStatus.UNAVAILABLE,
+                f"unavailable datasets: {sorted(unavailable_datasets)}",
             )
 
     return classification

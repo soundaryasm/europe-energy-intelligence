@@ -12,6 +12,7 @@ import requests
 from src.ingestion.entsoe_client import (
     ENTSOE_TOKEN_ENV_VAR,
     EntsoeAPIError,
+    EntsoeNoDataError,
     EntsoeRequest,
     MissingCredentialsError,
     _build_params,
@@ -20,7 +21,13 @@ from src.ingestion.entsoe_client import (
     get_security_token_from_env,
 )
 from src.ingestion.entsoe_datasets import GENERATION, LOAD, PRICE
-from tests.fixtures_entsoe_xml import ACKNOWLEDGEMENT_ERROR_XML, LOAD_XML, PRICE_XML
+from tests.fixtures_entsoe_xml import (
+    ACKNOWLEDGEMENT_ERROR_XML,
+    ACKNOWLEDGEMENT_GENUINE_ERROR_XML,
+    LOAD_XML,
+    MALFORMED_XML,
+    PRICE_XML,
+)
 
 DOMAIN = "10Y1001A1001A59C"
 
@@ -140,12 +147,35 @@ def test_fetch_entsoe_document_includes_token_in_request_params():
     assert kwargs["params"]["securityToken"] == "super-secret"
 
 
-def test_fetch_entsoe_document_raises_on_acknowledgement_error_document():
+def test_fetch_entsoe_document_raises_entsoe_no_data_error_on_no_matching_data_acknowledgement():
     session = MagicMock()
     session.get.return_value = _mock_response(200, ACKNOWLEDGEMENT_ERROR_XML)
 
-    with pytest.raises(EntsoeAPIError, match="No matching data"):
+    with pytest.raises(EntsoeNoDataError, match="No matching data"):
         fetch_entsoe_document(_request(LOAD), token="tok", session=session)
+
+
+def test_fetch_entsoe_document_raises_plain_api_error_on_genuine_acknowledgement_with_same_code():
+    # Same reason code (999) as the "no matching data" fixture above, but
+    # a genuinely different condition — must NOT be classified as
+    # EntsoeNoDataError merely because the code matches (Spec 007).
+    session = MagicMock()
+    session.get.return_value = _mock_response(200, ACKNOWLEDGEMENT_GENUINE_ERROR_XML)
+
+    with pytest.raises(EntsoeAPIError) as excinfo:
+        fetch_entsoe_document(_request(LOAD), token="tok", session=session)
+
+    assert not isinstance(excinfo.value, EntsoeNoDataError)
+
+
+def test_fetch_entsoe_document_raises_on_malformed_xml():
+    session = MagicMock()
+    session.get.return_value = _mock_response(200, MALFORMED_XML)
+
+    with pytest.raises(EntsoeAPIError) as excinfo:
+        fetch_entsoe_document(_request(LOAD), token="tok", session=session)
+
+    assert not isinstance(excinfo.value, EntsoeNoDataError)
 
 
 def test_fetch_entsoe_document_raises_on_unexpected_root_element():

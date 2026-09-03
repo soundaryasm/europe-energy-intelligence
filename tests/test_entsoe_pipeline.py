@@ -12,7 +12,7 @@ import pytest
 
 from src.config.countries import CountryConfig
 from src.config.entsoe import EntsoeCountryDomain
-from src.ingestion.entsoe_client import EntsoeAPIError
+from src.ingestion.entsoe_client import EntsoeAPIError, EntsoeNoDataError
 from src.ingestion.entsoe_datasets import GENERATION, LOAD, PRICE
 from src.ingestion.entsoe_pipeline import resolve_country_domains, run_ingestion
 from src.config.entsoe import EntsoeConfigError
@@ -95,6 +95,62 @@ def test_run_ingestion_isolates_failure_to_one_dataset():
 
     written_records = spark_writer.call_args[0][1]
     assert all(r["dataset_type"] != "price" for r in written_records)
+
+
+def test_run_ingestion_classifies_no_data_as_unavailable_not_failed():
+    def fetch_with_one_unavailable(request, **_):
+        if request.dataset.name == "generation":
+            raise EntsoeNoDataError("no matching data found")
+        return XML_BY_DATASET[request.dataset.name]
+
+    spark_writer = MagicMock(return_value=4)
+
+    result = run_ingestion(
+        date(2024, 1, 1), date(2024, 1, 1),
+        token="tok",
+        spark=MagicMock(),
+        countries=[IRELAND],
+        domains={"IE": IE_DOMAIN},
+        datasets=DATASETS,
+        fetch_fn=fetch_with_one_unavailable,
+        spark_writer=spark_writer,
+    )
+
+    assert result.unavailable == ["IE:generation"]
+    assert set(result.succeeded) == {"IE:load", "IE:price"}
+    assert result.failed == []
+    assert result.all_succeeded is True  # unavailable data must not fail the run
+    assert "IE:generation" not in result.errors  # not an error, just unavailable
+
+    written_records = spark_writer.call_args[0][1]
+    assert all(r["dataset_type"] != "generation" for r in written_records)  # no synthesized rows
+
+
+def test_run_ingestion_still_fails_when_a_real_failure_accompanies_unavailable_data():
+    def fetch_fn(request, **_):
+        if request.dataset.name == "generation":
+            raise EntsoeNoDataError("no matching data found")
+        if request.dataset.name == "price":
+            raise EntsoeAPIError("price feed down")
+        return XML_BY_DATASET[request.dataset.name]
+
+    spark_writer = MagicMock(return_value=2)
+
+    result = run_ingestion(
+        date(2024, 1, 1), date(2024, 1, 1),
+        token="tok",
+        spark=MagicMock(),
+        countries=[IRELAND],
+        domains={"IE": IE_DOMAIN},
+        datasets=DATASETS,
+        fetch_fn=fetch_fn,
+        spark_writer=spark_writer,
+    )
+
+    assert result.unavailable == ["IE:generation"]
+    assert result.failed == ["IE:price"]
+    assert result.succeeded == ["IE:load"]
+    assert result.all_succeeded is False  # a genuine failure still fails the run
 
 
 def test_run_ingestion_isolates_failure_to_one_country():

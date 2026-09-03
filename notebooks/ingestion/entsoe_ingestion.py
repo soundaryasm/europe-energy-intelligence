@@ -74,9 +74,13 @@ print(f"Execution mode:        {execution_mode}")
 print(f"Requested range:       {result.start_date} to {result.end_date}")
 print(f"Countries attempted:   {result.countries_attempted}")
 print(f"Datasets attempted:    {result.datasets_attempted}")
-print(f"Succeeded (country:dataset): {result.succeeded}")
-print(f"Failed (country:dataset):    {result.failed}")
+print(f"Succeeded (country:dataset):    {result.succeeded}")
+print(f"Unavailable (country:dataset):  {result.unavailable}")
+print(f"Failed (country:dataset):       {result.failed}")
 print(f"Records written:       {result.records_written}")
 
+# A legitimately unavailable source (Spec 006 "Partial Source Data") must
+# not fail the task — only a genuine technical/invalid-response failure
+# does.
 if not result.all_succeeded:
     raise RuntimeError(f"ENTSO-E ingestion failed for: {result.failed} ({result.errors})")

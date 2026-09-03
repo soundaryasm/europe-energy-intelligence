@@ -78,3 +78,24 @@ ACKNOWLEDGEMENT_ERROR_XML = """<?xml version="1.0" encoding="UTF-8"?>
   </Reason>
 </Acknowledgement_MarketDocument>
 """
+
+# Same reason CODE (999) as ACKNOWLEDGEMENT_ERROR_XML above, but a
+# genuinely different condition — used to prove classification inspects
+# the reason TEXT rather than trusting code 999 alone (Spec 007 "Source
+# Availability": code 999 may represent other conditions).
+ACKNOWLEDGEMENT_GENUINE_ERROR_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<Acknowledgement_MarketDocument xmlns="urn:iec62325.351:tc57wg16:451-1:acknowledgementdocument:6:1">
+  <mRID>ack-2</mRID>
+  <Reason>
+    <code>999</code>
+    <text>AMOUNT OF REQUESTED DATA EXCEEDS ALLOWED LIMIT</text>
+  </Reason>
+</Acknowledgement_MarketDocument>
+"""
+
+MALFORMED_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<GL_MarketDocument xmlns="urn:iec62325.351:tc57wg16:451-6:generationloaddocument:3:0">
+  <mRID>doc-broken
+  <TimeSeries>
+</GL_MarketDocument>
+"""

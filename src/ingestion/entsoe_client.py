@@ -41,9 +41,32 @@ _RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 # HTTP 200 (and also uses it for HTTP 4xx bodies).
 _ACKNOWLEDGEMENT_ROOT_TAG = "Acknowledgement_MarketDocument"
 
+# ENTSO-E reuses the same Acknowledgement_MarketDocument shape both for
+# "the request was understood but no data exists for this period" and
+# for genuine errors (bad parameters, auth failures, etc). The reason
+# CODE alone is not a reliable signal — ENTSO-E documents code 999 as a
+# generic/reused code covering multiple different conditions — so
+# classification inspects the reason TEXT for known "no data" phrasing
+# instead (Spec 007 "Source Availability": distinguish source
+# legitimately unavailable from an actual request failure).
+_NO_DATA_TEXT_MARKERS = ("no matching data found",)
+
 
 class EntsoeAPIError(RuntimeError):
     """Raised when the ENTSO-E API cannot be used to produce trustworthy data."""
+
+
+class EntsoeNoDataError(EntsoeAPIError):
+    """Raised when ENTSO-E acknowledges the request but reports no matching
+    data for the requested country/dataset/period.
+
+    This is a distinct condition from a technical `EntsoeAPIError`: the
+    source is legitimately unavailable for this request, not a broken
+    ingestion run (Spec 006 "Partial Source Data" / Spec 007 "Source
+    Availability"). Callers must classify this separately — e.g. as
+    `unavailable` rather than `failed` — instead of treating every
+    Acknowledgement_MarketDocument as a hard failure.
+    """
 
 
 class MissingCredentialsError(RuntimeError):
@@ -136,6 +159,24 @@ def _local_tag(element: ET.Element) -> str:
     return tag.split("}", 1)[1] if "}" in tag else tag
 
 
+def _acknowledgement_reason(root: ET.Element) -> Tuple[Optional[str], str]:
+    """Extract (code, text) from an Acknowledgement_MarketDocument's Reason."""
+    code: Optional[str] = None
+    text = "unknown reason"
+    for element in root.iter():
+        local = _local_tag(element)
+        if local == "code" and element.text:
+            code = element.text.strip()
+        elif local == "text" and element.text:
+            text = element.text.strip()
+    return code, text
+
+
+def _is_no_data_reason(reason_text: str) -> bool:
+    normalized = reason_text.strip().lower()
+    return any(marker in normalized for marker in _NO_DATA_TEXT_MARKERS)
+
+
 def _validate_response_xml(xml_text: str, request: EntsoeRequest) -> ET.Element:
     if not xml_text or not xml_text.strip():
         raise EntsoeAPIError(
@@ -153,14 +194,15 @@ def _validate_response_xml(xml_text: str, request: EntsoeRequest) -> ET.Element:
     root_tag = _local_tag(root)
 
     if root_tag == _ACKNOWLEDGEMENT_ROOT_TAG:
-        reason_text = "unknown reason"
-        for reason in root.iter():
-            if _local_tag(reason) == "text":
-                reason_text = reason.text or reason_text
-                break
+        code, reason_text = _acknowledgement_reason(root)
+        if _is_no_data_reason(reason_text):
+            raise EntsoeNoDataError(
+                f"ENTSO-E reported no matching data for {request.country_code}/"
+                f"{request.dataset.name} (reason code {code}): {reason_text}"
+            )
         raise EntsoeAPIError(
             f"ENTSO-E API reported an error for {request.country_code}/"
-            f"{request.dataset.name}: {reason_text}"
+            f"{request.dataset.name} (reason code {code}): {reason_text}"
         )
 
     if root_tag not in request.dataset.expected_root_tags:
@@ -185,8 +227,12 @@ def fetch_entsoe_document(
     """Fetch one raw ENTSO-E XML document for a country/dataset/date window.
 
     Bounded retries apply to transient network/HTTP failures. Non-retryable
-    HTTP errors, ENTSO-E error-acknowledgement documents, and structurally
-    unexpected responses raise `EntsoeAPIError` immediately.
+    HTTP errors, genuine ENTSO-E error-acknowledgement documents, and
+    structurally unexpected responses raise `EntsoeAPIError` immediately.
+    An acknowledgement whose reason is "no matching data found" raises
+    the more specific `EntsoeNoDataError` (a subclass of `EntsoeAPIError`)
+    instead — callers that need to tell a legitimately unavailable
+    source apart from a real failure should catch that first.
     """
     http = session or requests
     params = _build_params(request)
