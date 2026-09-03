@@ -2,28 +2,31 @@
 
 ## Goal
 
-Publish curated Gold datasets from Databricks into PostgreSQL for downstream consumption by Power BI.
+Publish curated Gold datasets from Databricks into Aiven PostgreSQL for downstream consumption by Power BI.
 
-PostgreSQL acts only as the serving layer.
+PostgreSQL is the serving layer only.
 
-Databricks remains the system of record.
+Databricks remains the analytical system of record.
 
 ## Architecture
 
 Databricks Gold
-→ PostgreSQL serving tables
+→ Aiven PostgreSQL
 → Power BI
 
 PostgreSQL must not contain:
 
-- Bronze data
-- Silver data
-- raw API payloads
-- unnecessary historical intermediate datasets
+- Bronze datasets
+- Silver datasets
+- raw API responses
+- raw ENTSO-E interval data
+- intermediate transformation datasets
+
+Only approved serving-ready Gold models should be published.
 
 ## Source Models
 
-Publish only the approved Gold models:
+Publish only:
 
 - `dim_country`
 - `dim_date`
@@ -31,38 +34,74 @@ Publish only the approved Gold models:
 - `fact_weather_daily`
 - `fact_generation_mix_daily`
 
+These models are defined by Spec 004 and form the serving contract.
+
+PostgreSQL must not recreate Gold-layer business logic.
+
 ## Target Database
 
-Use PostgreSQL. The hosting provider is not prescribed by this
-specification — any standard, network-reachable PostgreSQL instance
-(managed or self-hosted) that meets the connection, SSL, and storage
-requirements below is acceptable.
+Use Aiven PostgreSQL.
+
+The connection must be established from Databricks.
+
+The local machine is not part of the production data path.
+
+## Execution Environment
+
+Publishing MUST execute on Databricks.
+
+Python may be used for:
+
+- PostgreSQL connectivity
+- transaction management
+- batch writes
+- upsert operations
+- serving validation
+
+PySpark may be used to read and prepare Gold Delta datasets before publishing.
+
+Do not require:
+
+- local PostgreSQL
+- local pipeline execution
+- manually exported CSV files
+- manual database imports
+
+## PostgreSQL Client
+
+Use the approved PostgreSQL Python client from the project dependencies:
+
+`psycopg`
+
+Connection management must support:
+
+- SSL as required by Aiven
+- explicit connection timeout
+- clean connection closure
+- transactions
+- batch-oriented writes
+
+Do not open one database connection per row.
+
+## Credentials
 
 Database credentials must be retrieved securely at runtime.
 
 Never commit:
 
-- database password
-- connection string containing credentials
-- certificates containing secrets
-- tokens
+- hostname credentials
+- database passwords
+- secret-bearing connection strings
+- certificates containing private credentials
+- `.env` production credentials
 
-## Execution Environment
+Databricks-supported secret management must be used for the production runtime.
 
-Publishing MUST execute from Databricks.
+Credentials must never appear in logs or exception output.
 
-The local machine is not a supported runtime.
+## Serving Schema
 
-Python/PySpark may be used to:
-
-- read Gold Delta tables
-- prepare serving datasets
-- connect to PostgreSQL
-- execute upsert/load operations
-
-## Serving Tables
-
-Create:
+Create the following serving tables.
 
 ### dim_country
 
@@ -70,14 +109,19 @@ Primary key:
 
 `country_key`
 
-Expected fields:
+Required fields:
 
-- country_key
-- country_code
-- country_name
-- reference_location
-- timezone
-- entsoe_domain
+- `country_key`
+- `country_code`
+- `country_name`
+- `reference_location`
+- `timezone`
+- `entsoe_domain`
+
+Expected uniqueness:
+
+- `country_key`
+- `country_code`
 
 ### dim_date
 
@@ -85,19 +129,24 @@ Primary key:
 
 `date_key`
 
-Expected fields:
+Required fields:
 
-- date_key
-- date
-- year
-- quarter
-- month
-- month_name
-- day_of_month
-- day_of_week
-- day_name
-- week_of_year
-- is_weekend
+- `date_key`
+- `date`
+- `year`
+- `quarter`
+- `month`
+- `month_name`
+- `day_of_month`
+- `day_of_week`
+- `day_name`
+- `week_of_year`
+- `is_weekend`
+
+Expected uniqueness:
+
+- `date_key`
+- `date`
 
 ### fact_energy_daily
 
@@ -105,17 +154,17 @@ Logical key:
 
 `country_key + date_key`
 
-Expected fields:
+Required fields:
 
-- country_key
-- date_key
-- daily_demand_mwh
-- avg_day_ahead_price_eur_mwh
-- min_day_ahead_price_eur_mwh
-- max_day_ahead_price_eur_mwh
-- total_generation_mwh
-- renewable_generation_mwh
-- renewable_generation_pct
+- `country_key`
+- `date_key`
+- `daily_demand_mwh`
+- `avg_day_ahead_price_eur_mwh`
+- `min_day_ahead_price_eur_mwh`
+- `max_day_ahead_price_eur_mwh`
+- `total_generation_mwh`
+- `renewable_generation_mwh`
+- `renewable_generation_pct`
 
 ### fact_weather_daily
 
@@ -123,14 +172,14 @@ Logical key:
 
 `country_key + date_key`
 
-Expected fields:
+Required fields:
 
-- country_key
-- date_key
-- avg_temperature_c
-- avg_wind_speed_kmh
-- solar_radiation_mj_m2
-- reference_location
+- `country_key`
+- `date_key`
+- `avg_temperature_c`
+- `avg_wind_speed_kmh`
+- `solar_radiation_mj_m2`
+- `reference_location`
 
 ### fact_generation_mix_daily
 
@@ -138,224 +187,413 @@ Logical key:
 
 `country_key + date_key + production_type`
 
-Expected fields:
+Required fields:
 
-- country_key
-- date_key
-- production_type
-- generation_mwh
-- renewable_flag
-- generation_share_pct
+- `country_key`
+- `date_key`
+- `production_type`
+- `generation_mwh`
+- `renewable_flag`
+- `generation_share_pct`
+
+## Gold Contract
+
+PostgreSQL must preserve the semantics established in Gold.
+
+In particular:
+
+- missing data must remain missing
+- valid zero values must remain zero
+- negative electricity prices must remain valid
+- incomplete source data must not be represented as complete analytical data
+
+Do not use serving-layer transformations such as:
+
+`COALESCE(metric, 0)`
+
+merely to remove null values.
+
+PostgreSQL is not responsible for fixing incomplete upstream data.
+
+## Trusted Data
+
+Only validated Gold models may be published.
+
+Gold builds that fail required dbt tests or upstream quality gates must not overwrite the previous valid serving state.
+
+A known-invalid pipeline run must not be presented to Power BI as a successful refresh.
 
 ## Initial Load
 
 The initial serving load must publish the complete approved 24-month Gold history.
 
-The implementation must avoid creating duplicate records if the initial load is rerun.
+The initial load must be rerunnable safely.
+
+Do not depend on:
+
+- manual table deletion
+- manual database resets
+- blind append behaviour
 
 ## Daily Incremental Load
 
-After initial publication, only affected dates should normally be loaded.
+After the initial load, normal publication should process only affected dates.
 
-The publishing process must support:
+Affected dates may include:
 
-- new daily records
-- updated historical records
-- corrections caused by upstream source revisions
-- rerunning recent dates
+- newly completed dates
+- recently reprocessed dates
+- ENTSO-E revisions
+- dates that were previously incomplete and later became complete
 
-Do not rely on blind append-only behaviour.
+The serving process must therefore support both inserts and updates.
+
+## Lookback and Reprocessing
+
+The orchestration layer may intentionally reprocess recent dates.
+
+PostgreSQL publication must reconcile these records rather than assuming every date is immutable after its first publication.
+
+Example:
+
+A date initially contains:
+
+`daily_demand_mwh = null`
+
+because trusted demand data was incomplete.
+
+If ENTSO-E later provides complete data, rerunning the pipeline must allow that same logical fact to be updated with the trusted value.
 
 ## Upsert Strategy
 
-Serving tables must use deterministic keys.
-
-Use PostgreSQL upsert semantics or equivalent transactional behaviour.
+Use deterministic keys.
 
 Expected behaviour:
 
-- record does not exist → insert
-- record already exists → update
-- duplicate logical facts must not be created
+- target row does not exist → INSERT
+- target row exists and values changed → UPDATE
+- target row exists and values are unchanged → leave logically unchanged
+
+PostgreSQL `INSERT ... ON CONFLICT ... DO UPDATE` or an equivalent transactional upsert strategy may be used.
+
+Do not use blind append operations for serving facts.
+
+## Batch Publishing
+
+Rows should be published in batches.
+
+Avoid:
+
+- one INSERT per independent connection
+- one transaction per row
+- extremely chatty database access
+
+The MVP dataset is small, so favor simple, reliable batch writes over complex bulk-loading infrastructure.
 
 ## Transaction Behaviour
 
-A failed publishing operation must not leave a partially inconsistent serving dataset.
+Publishing must avoid leaving the serving layer in an inconsistent partial state.
 
-Where practical, logically related writes should execute transactionally.
+Dimensions must be available before dependent facts are committed.
 
-Failures must surface clearly.
+Where practical, use transactions for logically related operations.
+
+If a transaction fails:
+
+- roll it back
+- surface the failure
+- leave previously valid serving data intact
+- allow safe rerun
+
+## Dimensions
+
+`dim_country` is small and may be synchronized fully on each relevant serving run.
+
+`dim_date` may also be synchronized using a simple deterministic strategy.
+
+Dimension synchronization must not change deterministic keys between executions.
+
+## Facts
+
+Fact tables should normally be synchronized incrementally by affected date range.
+
+Do not truncate and reload the complete 24-month history every day unless there is a documented reason.
+
+The daily workflow should remain efficient even as history grows.
 
 ## Referential Integrity
 
-Fact tables should reference:
+Fact records must reference valid:
 
-- `dim_country`
-- `dim_date`
+- `country_key`
+- `date_key`
 
-Dimensions must be loaded before dependent facts.
+Dimension data must be published before dependent fact data.
 
-Foreign-key constraints may be implemented where they do not unnecessarily complicate the MVP.
+PostgreSQL foreign-key constraints may be used where appropriate.
 
-At minimum, referential integrity must be validated before or during publishing.
+Regardless of whether physical foreign-key constraints are enabled, referential integrity must be validated.
 
-## Schema Ownership
+Orphan fact rows are not permitted.
 
-PostgreSQL table schemas must follow the Gold model contract.
+## Primary and Unique Constraints
 
-Do not create additional business transformations inside PostgreSQL.
+The database should enforce the logical grain where practical.
 
-Business logic belongs in:
+Expected constraints:
 
-Databricks Silver
-or
-dbt Gold
+### dim_country
 
-PostgreSQL should primarily serve already-curated data.
+`PRIMARY KEY (country_key)`
+
+`UNIQUE (country_code)`
+
+### dim_date
+
+`PRIMARY KEY (date_key)`
+
+`UNIQUE (date)`
+
+### fact_energy_daily
+
+`UNIQUE (country_key, date_key)`
+
+### fact_weather_daily
+
+`UNIQUE (country_key, date_key)`
+
+### fact_generation_mix_daily
+
+`UNIQUE (country_key, date_key, production_type)`
+
+These constraints provide additional protection against accidental duplicate serving records.
 
 ## Indexing
 
-Create indexes only for realistic serving access patterns.
+Create indexes only for realistic Power BI access patterns.
 
-At minimum consider indexes supporting:
+Useful access patterns include:
 
-- country + date
-- date
-- production type where relevant
+- date filtering
+- country filtering
+- country + date filtering
+- production-type filtering
 
-Primary and unique keys should enforce logical grain.
+Primary and unique constraints already provide useful indexes.
 
 Do not over-index the small MVP dataset.
 
-## Storage Discipline
+## Data Types
 
-The PostgreSQL free-tier storage limit must be treated as a project constraint.
-
-Therefore:
-
-- publish only serving-ready Gold data
-- do not replicate Bronze/Silver datasets
-- avoid unnecessary duplicate tables
-- avoid storing raw payloads
-- periodically monitor database size
-
-The serving layer should remain intentionally compact.
-
-## Connection Handling
-
-Connections should:
-
-- use SSL where required
-- use explicit timeouts
-- avoid embedding credentials
-- close cleanly
-- fail visibly on authentication/network errors
-
-Avoid opening one database connection per individual record.
-
-Use batch-oriented writes.
-
-## Data Type Mapping
-
-Use explicit PostgreSQL types.
+Use explicit PostgreSQL data types.
 
 Examples:
 
-Identifiers:
-- INTEGER / BIGINT / VARCHAR as appropriate
+### Keys
 
-Dates:
-- DATE
+- INTEGER
+- BIGINT
+- VARCHAR
 
-Percentages and monetary values:
-- NUMERIC with appropriate precision
+as appropriate to the deterministic key design.
 
-Boolean flags:
-- BOOLEAN
+### Dates
 
-Do not rely entirely on automatic type inference.
+`DATE`
 
-## Idempotency
+### Boolean Flags
 
-Publishing the same country/date more than once must result in the same logical serving state.
+`BOOLEAN`
 
-This applies to:
+### Measurements
 
-- manual reruns
-- retries
-- historical corrections
-- daily incremental loads
+Use suitable numeric types.
 
-## Validation
+Examples:
 
-Before publication, validate:
+- `NUMERIC`
+- `DOUBLE PRECISION`
+
+The selected types should preserve sufficient analytical precision without introducing unnecessary precision.
+
+Do not depend entirely on automatic schema inference.
+
+## Null Handling
+
+Null values from trusted Gold models must retain their meaning.
+
+Examples:
+
+- unavailable demand → null
+- unavailable price → null
+- unavailable weather → null
+- genuine zero generation → `0`
+
+Never transform null into zero simply because Power BI handles zero more conveniently.
+
+## Deletions and Corrections
+
+The serving process must account for cases where a previously published Gold record becomes invalid or disappears after upstream correction.
+
+The implementation must avoid leaving stale serving records indefinitely.
+
+A reasonable approach is to reconcile all rows within the affected reprocessing date window.
+
+Do not assume that upserts alone always handle every possible correction scenario.
+
+## Storage Discipline
+
+Aiven PostgreSQL is intentionally a compact serving layer.
+
+Therefore:
+
+- publish only approved Gold models
+- do not replicate Bronze
+- do not replicate Silver
+- do not retain raw XML/JSON payloads
+- avoid unnecessary duplicate aggregates
+- monitor database size periodically
+
+Databricks retains the larger historical and intermediate datasets.
+
+## Connection Failure Behaviour
+
+Connection failures must be distinguishable from data-quality failures.
+
+Examples include:
+
+- DNS failure
+- timeout
+- authentication failure
+- SSL failure
+- database unavailable
+
+A PostgreSQL connectivity failure must:
+
+- leave Databricks Gold unaffected
+- fail the publish task visibly
+- permit safe rerun
+
+## Validation Before Publication
+
+Before writing to PostgreSQL, validate:
 
 - required keys are present
 - logical keys are unique
-- dimension relationships are valid
-- required numeric values have expected types
+- expected Gold models exist
+- required dbt tests succeeded
+- relationships are valid
+- requested processing dates are represented as expected
 
-After publication, validate:
+Do not publish known-invalid Gold datasets.
 
-- expected row counts
-- no duplicate logical keys
-- no orphan fact records
-- published date range matches the requested load
+## Validation After Publication
+
+After publication, validate at minimum:
+
+- expected target rows exist
+- logical keys remain unique
+- no orphan facts exist
+- affected date range was synchronized
+- target row counts are plausible
+- dimensions required by published facts exist
+
+For incremental runs, validation should focus primarily on the affected date range rather than rescanning unnecessarily large history.
+
+## Idempotency
+
+Publishing the same Gold dataset repeatedly must produce the same logical PostgreSQL state.
+
+This applies to:
+
+- initial-load reruns
+- daily retries
+- manual reruns
+- source revisions
+- reprocessing incomplete dates
+
+Repeated runs must not create duplicate serving rows.
 
 ## Observability
 
-Each publish execution should expose:
+Each serving execution should expose:
 
-- start time
-- end time
+- execution start time
+- execution end time
+- requested date range
 - tables processed
+- source rows considered
 - rows inserted
 - rows updated
+- rows removed/reconciled where applicable
 - rows rejected
-- failed tables
-- requested date range
+- validation result
 - execution status
 
 Credentials must never appear in logs.
 
 ## Power BI Contract
 
-Power BI must consume PostgreSQL only.
+Power BI consumes PostgreSQL only.
 
-Power BI must not depend directly on:
+Power BI must not directly depend on:
 
-- Bronze Delta tables
-- Silver Delta tables
-- Databricks internal transformation models
+- Bronze tables
+- Silver tables
+- Databricks internal implementation details
 
-The PostgreSQL schema therefore represents the stable BI-facing contract.
+The PostgreSQL schema therefore represents the stable external analytical contract.
 
-## Failure Behaviour
+Power BI should not need to know how ENTSO-E or Open-Meteo data was originally ingested.
 
-If PostgreSQL publication fails:
+## Failure Recovery
 
-- Databricks Gold data must remain unaffected
-- the failure must be visible
-- the serving load must be safely rerunnable
-- partial duplicate data must not be created
+If serving publication fails:
+
+1. Databricks Gold remains authoritative.
+2. Existing valid PostgreSQL state should remain usable where transactional behaviour permits.
+3. The failed publish operation can be rerun.
+4. Manual deletion of serving tables should not normally be required.
+5. Duplicate facts must not be created during recovery.
+
+## Free-Tier Constraint
+
+The serving implementation must remain compatible with the project's approved free-tier architecture.
+
+Do not move large raw datasets into PostgreSQL merely because they are easier to query there.
+
+The intended separation remains:
+
+Databricks
+→ large analytical/system-of-record storage
+
+PostgreSQL
+→ small curated serving layer
 
 ## Acceptance Criteria
 
 This specification is complete when:
 
-1. Databricks can connect securely to PostgreSQL.
-2. All five approved serving tables exist.
-3. Initial 24-month Gold history can be published.
-4. Daily incremental publishing works.
-5. Existing dates can be safely updated.
-6. Duplicate logical facts cannot be created.
-7. Dimension/fact relationships remain valid.
-8. PostgreSQL contains only serving-layer datasets.
-9. Credentials are not present in source control.
-10. Batch writes are used.
-11. Publish failures are observable and rerunnable.
-12. Power BI can consume the resulting schema.
-13. No local runtime dependency exists.
+1. Databricks can connect securely to Aiven PostgreSQL.
+2. Production credentials are retrieved securely at runtime.
+3. All five approved serving tables exist.
+4. PostgreSQL schemas match the Gold serving contract.
+5. Initial 24-month Gold history can be published.
+6. Daily incremental publication works.
+7. Recently reprocessed dates can be updated.
+8. Previously incomplete metrics can later be corrected.
+9. Deterministic upserts prevent duplicate logical records.
+10. Primary/unique constraints protect documented grains.
+11. Dimension/fact relationships remain valid.
+12. Missing Gold values remain null rather than being converted to zero.
+13. Negative electricity prices remain valid.
+14. Only validated Gold datasets are published.
+15. Failed Gold quality gates prevent serving publication.
+16. Batch-oriented database writes are used.
+17. Failed database transactions can be safely rerun.
+18. PostgreSQL remains a serving layer rather than a raw-data store.
+19. Power BI can consume the resulting schema.
+20. No local runtime dependency exists.
 
 ## Out of Scope
 
@@ -367,5 +605,7 @@ This specification does not include:
 - Power BI dashboard design
 - public application APIs
 - streaming
+- raw ENTSO-E storage in PostgreSQL
+- raw Open-Meteo storage in PostgreSQL
 - PostgreSQL-based business transformations
-- storing raw historical data in PostgreSQL
+- using PostgreSQL as the analytical system of record

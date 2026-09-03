@@ -2,263 +2,544 @@
 
 ## Goal
 
-Define consistent data-quality checks across Bronze, Silver, Gold, and PostgreSQL serving layers.
+Define consistent data-quality rules across Bronze, Silver, Gold, and PostgreSQL serving layers.
 
-The objective is to detect:
+The project must detect and surface:
 
+- malformed source responses
 - missing data
-- duplicate records
-- invalid values
-- broken relationships
-- incomplete source loads
-- unexpected schema changes
+- incomplete timeline coverage
+- duplicate observations
+- overlapping observations
+- invalid measurements
+- unexpected source changes
+- broken dimensional relationships
+- stale serving data
 
-Data-quality failures must be visible and must not silently propagate into Power BI.
+Known-invalid or incomplete data must not silently propagate into trusted Power BI metrics.
 
 ## Principles
 
-Data quality should be applied progressively.
+Data quality is applied progressively.
 
 ### Bronze
 
-Validate that source ingestion succeeded and produced structurally usable data.
+Validate that external source data was retrieved and parsed correctly while preserving source fidelity.
 
 ### Silver
 
-Validate cleaned and standardized analytical values.
+Validate analytical usability, completeness, units, timestamps, and business-safe transformations.
 
 ### Gold
 
-Validate business rules, model grain, uniqueness, and relationships using dbt.
+Validate dimensional grain, relationships, business calculations, and model consistency using dbt.
 
 ### PostgreSQL
 
-Validate that serving data matches the approved Gold contract.
+Validate that the serving layer accurately reflects approved Gold models.
 
-## Bronze Checks
+## Quality Status
 
-Bronze checks should remain lightweight.
+Where source completeness is relevant, use consistent statuses:
+
+- `complete`
+- `partial`
+- `unavailable`
+- `invalid`
+
+A technical execution result and an analytical completeness status are different concepts.
+
+For example:
+
+- API request succeeds
+- XML parses correctly
+- records are returned
+- but three hours are missing
+
+This is technically successful ingestion but analytically:
+
+`partial`
+
+Do not reduce these states to a single success/failure boolean.
+
+## Bronze Validation
+
+Bronze validation should remain lightweight and source-oriented.
 
 At minimum validate:
 
-- API request succeeded
-- response is not an API/error document
-- expected source fields are present
-- country is known
-- timestamps/dates can be parsed
-- numeric values can be parsed where required
+- HTTP request completed successfully
+- response is not an API error document
+- response can be parsed
+- required structural elements exist
+- country/source configuration is known
+- timestamps/dates are parseable
+- numeric fields can be parsed where required
 - source system is recorded
 - ingestion timestamp is present
 
-Do not apply heavy business logic in Bronze.
+Bronze should preserve valid source records even when the requested period is incomplete.
 
-Raw source values should generally be preserved.
+Do not apply heavy analytical business logic in Bronze.
 
-## Source Completeness
+## ENTSO-E Response Validation
 
-Each ingestion run must make it possible to determine whether expected data was received.
+For ENTSO-E, validate:
 
-For each:
+- expected MarketDocument structure
+- expected document/process type
+- one or more valid TimeSeries where data exists
+- valid Period boundaries
+- supported Period resolution
+- valid Point positions
+- parseable numeric quantities
+- required bidding-zone/domain information
+- expected units where applicable
 
-`country + dataset + processing_date`
+Do not interpret ENTSO-E acknowledgement/error XML as valid empty analytical data.
 
-record:
+## ENTSO-E Timeline Reconstruction
 
-- request attempted
-- request succeeded
-- records returned
-- records written
-- ingestion timestamp
+Completeness must be evaluated using reconstructed timestamps.
 
-An HTTP success response with unexpectedly empty data must not automatically be considered a successful analytical load.
+Each Point timestamp is derived from:
 
-## Duplicate Checks
+`Period start + (position - 1) × resolution`
 
-Logical duplicate detection must exist throughout the pipeline.
+Each Period must be evaluated independently.
 
-Examples of Bronze/Silver business keys include:
+Do not assume:
+
+- a TimeSeries has one Period
+- positions continue across Periods
+- the first Period starts at midnight
+- Periods are contiguous
+- record count alone proves completeness
+
+Gaps between Periods must remain identifiable.
+
+## ENTSO-E Completeness
+
+For each relevant:
+
+`country + dataset + local_date`
+
+determine whether the required timeline is complete.
+
+Completeness must consider:
+
+- reconstructed timestamps
+- source resolution
+- interval duration
+- missing intervals
+- overlapping intervals
+- timezone conversion
+- local-day boundaries
+- daylight-saving-time transitions
+
+Do not hard-code:
+
+`96 points = complete day`
+
+as a universal rule.
+
+A normal PT15M day may contain 96 intervals, but completeness must be based on the expected timeline for that actual date and timezone.
+
+## Partial ENTSO-E Data
+
+If some valid observations exist but expected timeline coverage is incomplete:
+
+classify the dataset/date as:
+
+`partial`
+
+Partial data must:
+
+- remain available for diagnosis
+- not be filled with synthetic zero values
+- not be extrapolated automatically
+- not produce a trusted understated daily metric
+- remain eligible for later reprocessing
+
+A later ENTSO-E lookback run may replace the partial state once missing observations become available.
+
+## ENTSO-E Overlaps
+
+Detect overlapping logical observations.
+
+Examples include:
+
+- overlapping Periods
+- repeated source intervals
+- observations retrieved again during lookback execution
+
+Deduplicate using deterministic source business keys before analytical aggregation.
+
+An overlapping interval must never contribute twice to:
+
+- demand
+- generation
+- weighted price calculations
+
+## Open-Meteo Validation
+
+For Open-Meteo validate:
+
+- expected response structure
+- requested daily dates are represented where expected
+- required daily measurement arrays exist
+- parallel date/value arrays align correctly
+- returned timezone is present
+- numeric measurements are parseable
+- units are known or explicitly normalized
+- returned coordinates are valid
+
+Configured coordinates and returned weather-grid coordinates may differ.
+
+This is expected behaviour and must not be treated as a quality failure.
+
+## Source Availability
+
+Every ingestion run must distinguish:
+
+- data available and complete
+- data available but partial
+- data legitimately unavailable
+- source request failed
+- response invalid
+
+An HTTP `200` response alone does not imply usable analytical data.
+
+## Duplicate Handling
+
+Logical duplicates must be detected deterministically.
+
+Example business keys:
 
 ### ENTSO-E Load
 
 - country
-- source timestamp
 - dataset type
+- source timestamp
 
 ### ENTSO-E Price
 
 - country
-- source timestamp
 - dataset type
+- source timestamp
 
 ### ENTSO-E Generation
 
 - country
+- dataset type
 - source timestamp
 - production type
-- dataset type
 
-### Weather
+### Open-Meteo
 
 - country
-- source timestamp/date
-- weather variable
+- local date
 
-The most recently ingested valid source record should win when revised source records exist.
+When multiple valid versions of the same logical observation exist, prefer the latest valid ingestion/source revision according to the project's deterministic reconciliation logic.
 
 ## Silver Quality Rules
 
-### Electricity Demand
+## Electricity Demand
 
 Validate:
 
-- country is valid
-- local date is present
+- country is configured
+- source timestamp is valid
+- source resolution is supported
 - interval duration is positive
-- load values are non-negative
-- calculated daily demand is non-negative
+- load is numeric
+- load is non-negative
+- duplicates are resolved
+- overlapping intervals are resolved
+- local date is valid
 
-Do not assume a fixed number of intervals per day.
+Trusted daily demand requires complete timeline coverage.
 
-### Electricity Prices
+If coverage is partial:
+
+`daily_demand_mwh`
+
+must not be presented as a trusted complete daily metric.
+
+## Electricity Prices
 
 Validate:
 
-- country is valid
-- local date is present
+- country is configured
+- timestamps are valid
+- interval duration is valid
 - prices are numeric
-- interval duration is positive
+- required timeline coverage is complete for trusted daily metrics
 
 Negative prices are valid.
 
-Do not reject them.
+Do not reject:
+
+- zero prices
+- negative prices
+
+simply because they appear unusual.
+
+## Generation
+
+Validate:
+
+- country is configured
+- timestamp is valid
+- production type exists
+- production type mapping exists
+- renewable classification exists
+- source interval duration is valid
+- generation is numeric
+
+Generation should normally be non-negative unless documented source semantics justify otherwise.
+
+Previously unseen production types must be surfaced rather than silently discarded.
+
+## Generation Completeness
+
+Evaluate generation timeline coverage at the appropriate production-type level.
+
+Missing observations are not equivalent to:
+
+`0 MWh generation`
+
+A reported zero is valid data.
+
+An absent interval is missing data.
+
+These must remain analytically distinct.
+
+## Weather
+
+Validate:
+
+- configured country exists
+- local date exists
+- required daily metrics are present where expected
+- temperature is numeric
+- wind speed is numeric and non-negative
+- solar radiation is numeric and non-negative
+
+Use configurable plausibility bounds only to detect obvious corruption or parsing errors.
+
+Do not create overly narrow climate rules that reject legitimate weather.
+
+## Unit Validation
+
+Canonical analytical units are:
+
+### Demand
+
+`MWh`
 
 ### Generation
 
-Validate:
+`MWh`
 
-- country is valid
-- local date is present
-- production type is present
-- normalized production type exists
-- renewable classification exists
-- generation values are non-negative unless explicitly justified by source semantics
+### Price
 
-Unknown production types should be surfaced and mapped deliberately.
+`EUR/MWh`
 
-Do not silently drop them.
+### Temperature
 
-### Weather
+`°C`
 
-Validate:
+### Wind Speed
 
-- country is valid
-- local date is present
-- temperature is numeric
-- wind speed is non-negative
-- solar radiation is non-negative
+`km/h`
 
-Use configurable plausibility bounds for weather measurements.
+### Solar Radiation
 
-Plausibility checks should detect obvious source/parser issues rather than enforce overly narrow climate assumptions.
+`MJ/m²`
+
+Source units must be validated before conversion.
+
+Unknown units must not be silently assumed to match the canonical unit.
+
+## Null Semantics
+
+Null measurements must retain their meaning.
+
+Never automatically convert missing values to zero.
+
+Examples:
+
+- missing demand != zero demand
+- missing generation != zero generation
+- missing price != zero price
+- missing weather != zero weather
+
+Zero is a valid business value only when the source actually represents zero.
+
+## Trusted Silver Output
+
+Trusted Silver datasets must contain analytically valid daily values.
+
+Records classified as:
+
+- `partial`
+- `invalid`
+- `unavailable`
+
+must not silently contribute to trusted downstream calculations.
+
+Diagnostic records may be preserved separately.
+
+## Quarantine / Rejected Records
+
+Where useful, invalid records may be persisted to a rejected/quarantine dataset.
+
+Recommended fields:
+
+- source system
+- country
+- dataset
+- processing date
+- source record identifier
+- validation rule
+- rejection reason
+- ingestion timestamp
+
+Quarantine is intended for diagnosis.
+
+Rejected records must not enter trusted Gold models.
 
 ## Gold Quality Rules
 
-Gold model validation should primarily use dbt tests.
+Gold validation should primarily use dbt tests.
 
-### dim_country
-
-Validate:
-
-- unique `country_key`
-- unique `country_code`
-- no null keys
-- exactly five MVP countries
-
-### dim_date
+## dim_country
 
 Validate:
 
-- unique `date_key`
-- unique `date`
-- no null keys
-- continuous date coverage for the required analytical range
+- `country_key` unique
+- `country_key` not null
+- `country_code` unique
+- `country_code` not null
+- exactly five MVP countries exist
 
-### fact_energy_daily
+Expected countries:
 
-Validate grain:
+- Ireland
+- Germany
+- France
+- Spain
+- Netherlands
+
+## dim_date
+
+Validate:
+
+- `date_key` unique
+- `date_key` not null
+- `date` unique
+- `date` not null
+- required analytical date range is covered
+
+## fact_energy_daily
+
+Grain:
 
 `country_key + date_key`
 
 Validate:
 
-- unique logical grain
-- non-null foreign keys
-- valid country relationship
-- valid date relationship
-- demand >= 0
-- generation >= 0
+- logical grain is unique
+- foreign keys are not null
+- country relationship is valid
+- date relationship is valid
+- demand >= 0 where present
+- total generation >= 0 where present
+- renewable generation >= 0 where present
 - renewable percentage between 0 and 100 where calculable
 
 Negative electricity prices remain valid.
 
-### fact_weather_daily
+Missing trusted energy metrics must remain null rather than being converted to zero.
 
-Validate grain:
+## fact_weather_daily
+
+Grain:
 
 `country_key + date_key`
 
 Validate:
 
-- unique logical grain
-- valid foreign keys
-- wind speed >= 0
-- solar radiation >= 0
+- logical grain is unique
+- foreign keys are valid
+- wind speed >= 0 where present
+- solar radiation >= 0 where present
 
-### fact_generation_mix_daily
+Missing weather metrics must remain null.
 
-Validate grain:
+## fact_generation_mix_daily
+
+Grain:
 
 `country_key + date_key + production_type`
 
 Validate:
 
-- unique logical grain
-- valid foreign keys
-- generation >= 0
-- generation share between 0 and 100 where calculable
+- logical grain is unique
+- foreign keys are valid
+- production type is not null
 - renewable flag is not null
+- generation >= 0 where present
+- generation share between 0 and 100 where calculable
 
-## Cross-Dataset Validation
+## Cross-Model Reconciliation
 
-Where appropriate, perform consistency checks across datasets.
+For complete country/date generation datasets:
 
-Examples:
+`SUM(fact_generation_mix_daily.generation_mwh)`
 
-### Generation Share
-
-For each:
-
-`country + date`
-
-generation-share percentages should approximately sum to 100%.
-
-Allow a small numerical tolerance.
-
-### Renewable Generation
-
-Renewable generation must equal the sum of generation classified as renewable.
-
-### Total Generation
+must reconcile with:
 
 `fact_energy_daily.total_generation_mwh`
 
-must reconcile with the total generation represented by:
+within an approved numerical tolerance.
 
-`fact_generation_mix_daily`
+Likewise:
 
-within an appropriate numerical tolerance.
+`SUM(generation_mwh WHERE renewable_flag = true)`
 
-## Completeness Checks
+must reconcile with:
+
+`fact_energy_daily.renewable_generation_mwh`
+
+Generation shares should approximately sum to:
+
+`100%`
+
+for complete generation datasets.
+
+Allow a small tolerance for numerical precision.
+
+## Renewable Percentage
+
+Where total generation is greater than zero:
+
+`renewable_generation_pct`
+
+must equal:
+
+`renewable_generation_mwh / total_generation_mwh × 100`
+
+within numerical tolerance.
+
+Where total generation is zero or unavailable:
+
+the percentage must be handled explicitly.
+
+Do not silently divide by zero.
+
+## Completeness Across Countries
 
 The expected MVP geography is:
 
@@ -268,185 +549,226 @@ The expected MVP geography is:
 - Spain
 - Netherlands
 
-For each processing date, determine which countries have usable data.
+For every processing date, report country-level data availability.
 
-Do not blindly require all five countries if the upstream source legitimately has delayed or unavailable data.
+Do not blindly fail because all five countries are not complete.
 
 Instead distinguish:
 
 - complete
-- partially available
+- partial
 - unavailable
-- failed ingestion
+- failed
 
-A missing country must be visible in execution results.
+Missing countries/datasets must remain visible.
 
 ## Freshness
 
-For normal daily execution, validate that newly processed data corresponds to the expected processing period.
+Track the difference between:
 
-Detect situations where:
+- workflow execution time
+- ingestion time
+- source data date
+- latest complete analytical date
+- PostgreSQL publication time
 
-- the pipeline runs successfully
-- but only stale historical data is present
+A successful workflow run must not imply that every source published newer complete data.
 
-Serving publication should not claim a successful new refresh when no valid new data was produced.
-
-## Null Handling
-
-Do not convert null measurements to zero unless zero is explicitly the correct business meaning.
-
-Examples:
-
-- missing price != zero price
-- missing generation != zero generation
-- missing weather observation != zero weather
-
-Required-key nulls should fail validation.
-
-Optional measurement nulls should remain identifiable.
+Detect stale data where the pipeline executes but no new usable analytical period becomes available.
 
 ## Schema Drift
 
-Unexpected source schema changes must be visible.
+Unexpected source changes must be surfaced.
 
 Examples:
 
-- missing required XML element
-- renamed API field
-- unexpected data type
+- missing required XML elements
+- unexpected Period resolution
 - new ENTSO-E production type
+- Open-Meteo response-field changes
+- unexpected unit
+- changed response data type
 
-Do not silently discard fields or records solely to keep the pipeline running.
-
-## Quarantine / Invalid Records
-
-Where practical, invalid Silver-stage records may be written to a dedicated rejected/quarantine dataset containing:
-
-- source identifier
-- country
-- processing date
-- original record identifier
-- validation rule
-- rejection reason
-- ingestion timestamp
-
-Quarantine is optional for simple failures but preferred when invalid source records need investigation.
-
-Invalid records must not silently enter trusted Gold models.
-
-## Pipeline Gating
-
-Data quality must influence workflow execution.
-
-At minimum:
-
-- failed critical ingestion checks block Silver
-- failed critical Silver validation blocks dbt
-- failed required dbt tests block PostgreSQL publication
-
-Warnings may be permitted for non-critical quality issues.
-
-Critical vs warning rules must be explicit.
+Do not silently discard unfamiliar records merely to keep the pipeline green.
 
 ## Critical Failures
 
-Examples of critical failures:
+Examples of critical failures include:
 
-- source authentication failure
-- malformed API response
-- missing required country/date keys
-- duplicate Gold logical keys
+- authentication failure
+- malformed source response
+- unsupported required source schema
+- invalid deterministic keys
+- duplicate Gold logical grains
 - broken dimension relationships
-- invalid model grain
 - failed required dbt tests
 - corrupted serving schema
 
-Critical failures must stop downstream publication.
+Critical failures must block downstream publication.
+
+## Non-Critical Partial Data
+
+Partial or temporarily unavailable source data may be analytically non-critical if the pipeline safely preserves null/incomplete semantics.
+
+For example:
+
+ENTSO-E missing intervals for one country/date may result in:
+
+- successful Bronze ingestion
+- partial completeness status
+- no trusted daily demand
+- valid Gold row with null metric where appropriate
+- later correction through lookback reprocessing
+
+Do not convert every partial-source case into a total pipeline outage.
 
 ## Warnings
 
-Examples of warnings:
+Warnings may include:
 
-- one source publishes fewer observations than historically typical
 - unusual but plausible price
-- unusually high/low weather measurement
-- temporary absence of one optional metric
+- unusual weather measurement
+- reduced interval coverage
+- newly observed production type
+- one country temporarily unavailable
 
-Warnings should be logged but do not necessarily stop the pipeline.
+Warnings should be visible but do not necessarily block the complete workflow.
 
-## Observability
+Critical/warning classification must be explicit.
 
-Each run should report quality information such as:
+## Pipeline Gating
 
-- source records received
-- valid records
-- rejected records
-- duplicates removed
-- null counts for important fields
-- countries available
-- countries missing
-- dbt test results
-- serving validation results
+At minimum:
 
-Quality metrics should be easy to inspect in Databricks job logs.
+- malformed critical source data blocks dependent transformation
+- critical Silver validation blocks Gold build
+- failed required dbt tests block PostgreSQL publication
+- invalid Gold serving contract blocks publication
 
-## Historical Backfill
-
-Data-quality checks also apply to historical backfills.
-
-Historical backfill must not bypass validation solely because it processes larger date ranges.
-
-Quality reporting should make it possible to identify specific dates/countries with problems.
+PostgreSQL must never receive a Gold build known to violate required quality rules.
 
 ## PostgreSQL Validation
 
-Before publishing, validate the Gold dataset.
+Before publication validate:
 
-After publishing, verify:
+- serving models exist
+- required keys are present
+- logical keys are unique
+- dimension relationships are valid
+- required dbt tests passed
 
-- expected rows exist
-- logical keys remain unique
+After publication validate:
+
+- affected rows exist
+- serving grains remain unique
 - no orphan facts exist
-- target date range was updated
-- serving row counts are reasonable relative to Gold
+- affected date range was reconciled
+- target row counts are plausible
 
-Do not modify Gold data to accommodate serving-layer failures.
+## Stale Serving Protection
 
-## Power BI Protection
+If a new pipeline run fails critically:
 
-Power BI must consume only validated PostgreSQL serving tables.
+do not replace previously valid PostgreSQL data with an incomplete or corrupted serving state.
 
-Known-invalid pipeline runs must not overwrite the last valid serving state with incomplete data.
+The last trusted serving state should remain usable where possible.
+
+## Reprocessing Behaviour
+
+Quality state must be capable of improving over time.
+
+Example:
+
+Day 1:
+
+`2026-09-01 Netherlands load = partial`
+
+Later ENTSO-E publishes missing observations.
+
+Lookback rerun:
+
+`2026-09-01 Netherlands load = complete`
+
+The pipeline must allow the trusted Silver, Gold, and PostgreSQL state for that date to be updated accordingly.
+
+## Historical Backfill
+
+All quality rules also apply to the 24-month historical backfill.
+
+Backfill must not bypass:
+
+- completeness checks
+- duplicate handling
+- unit validation
+- business validation
+
+Backfill quality reporting should identify problematic:
+
+- countries
+- datasets
+- dates
+
+so individual ranges can be reprocessed.
+
+## Observability
+
+Each run should expose quality metrics including:
+
+- source requests attempted
+- responses successful
+- complete source periods
+- partial source periods
+- unavailable periods
+- failed periods
+- records received
+- records rejected
+- duplicates removed
+- overlaps detected
+- null counts for key measurements
+- countries represented
+- countries missing
+- dbt tests passed
+- dbt tests failed
+- serving validation result
+
+Quality state must be inspectable from Databricks execution history/logging.
 
 ## Acceptance Criteria
 
 This specification is complete when:
 
-1. Bronze ingestion validates API response structure.
-2. Empty/unavailable source data can be distinguished from successful ingestion.
-3. Duplicate logical source records are handled deterministically.
-4. Silver datasets enforce basic measurement rules.
-5. Unknown production types are surfaced.
-6. Gold models enforce documented grains.
-7. Gold uniqueness and relationship tests exist.
-8. Renewable and generation-share calculations are validated.
-9. Cross-model generation totals reconcile within tolerance.
-10. Missing countries/dates are observable.
-11. Critical quality failures prevent PostgreSQL publishing.
-12. Negative electricity prices remain valid.
-13. Null measurements are not silently converted to zero.
-14. PostgreSQL publication is validated.
-15. Quality results are visible from Databricks workflow execution.
+1. Source API errors are distinguishable from valid empty/unavailable data.
+2. ENTSO-E XML structure is validated.
+3. ENTSO-E completeness is based on reconstructed timeline coverage.
+4. Multiple Period elements are handled correctly.
+5. Gaps between ENTSO-E Periods are detectable.
+6. Point count alone is not used as the universal completeness rule.
+7. Partial ENTSO-E days do not produce misleading trusted daily metrics.
+8. Duplicate and overlapping source observations are resolved.
+9. Open-Meteo daily payload structure is validated.
+10. Requested and returned weather coordinates are handled correctly.
+11. Missing measurements are not converted to zero.
+12. Silver datasets enforce required unit and measurement rules.
+13. Unknown production types are surfaced.
+14. Gold models enforce documented grains.
+15. Required dbt uniqueness and relationship tests exist.
+16. Renewable-generation calculations are validated.
+17. Generation totals reconcile across Gold models.
+18. Missing/partial country data remains observable.
+19. Critical quality failures block PostgreSQL publication.
+20. Partial but safely represented data does not unnecessarily fail the entire workflow.
+21. PostgreSQL publication is validated before and after writes.
+22. Previously partial dates can become complete after later reprocessing.
+23. Quality results are visible through Databricks workflow execution.
 
 ## Out of Scope
 
 This specification does not include:
 
-- enterprise data-observability platforms
 - Monte Carlo
 - Great Expectations
-- dedicated alerting infrastructure
-- anomaly-detection machine learning
-- automated source-quality SLAs
-- real-time quality monitoring
+- dedicated enterprise observability platforms
+- machine-learning anomaly detection
+- real-time data-quality monitoring
+- formal SLA management
+- PagerDuty/Slack alerting

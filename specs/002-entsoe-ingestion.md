@@ -8,7 +8,9 @@ The pipeline must support:
 
 - 24-month historical backfill
 - daily incremental ingestion
+- recent-date reprocessing
 - safe reruns
+- partial-data detection
 - Bronze Delta persistence
 
 ## Countries
@@ -21,84 +23,71 @@ The MVP covers:
 - Spain
 - Netherlands
 
-ENTSO-E bidding-zone/domain identifiers must be maintained in configuration.
+ENTSO-E bidding-zone/domain identifiers must be maintained centrally in configuration.
 
 Do not scatter EIC/domain codes throughout ingestion logic.
-
-Codes must be validated against ENTSO-E before being committed to production configuration.
 
 ## Source
 
 Use the ENTSO-E Transparency Platform Web API.
 
-Production API endpoint:
+Production endpoint:
 
 `https://web-api.tp.entsoe.eu/api`
 
-Authentication must use the ENTSO-E security token.
+Authentication uses the ENTSO-E Web API security token.
 
-The security token must be retrieved securely at runtime.
+The token must be retrieved securely at runtime.
 
 Never hard-code or commit the token.
 
 ## Required Datasets
 
-The MVP requires three energy datasets.
-
 ### Actual Electricity Load
 
-Retrieve actual total load.
+Retrieve actual total load using:
 
-ENTSO-E identifies actual total load using:
+- `documentType=A65`
+- `processType=A16`
 
-- Document type: `A65`
-- Process type: `A16` — realised
+ENTSO-E documents this as realised total load.
 
-The source may provide sub-daily resolutions such as hourly, 30-minute, or 15-minute intervals.
+The source may return:
 
-The source resolution must be preserved in Bronze.
+- PT60M
+- PT30M
+- PT15M
 
-Daily demand will be calculated downstream.
+or another supported source resolution.
+
+The source resolution must be preserved.
 
 ### Actual Generation by Production Type
 
-Retrieve aggregated actual generation by production type.
+Retrieve aggregated actual generation by production type using:
 
-ENTSO-E identifies this dataset using:
+- `documentType=A75`
+- `processType=A16`
 
-- Document type: `A75`
-- Process type: `A16` — realised
+ENTSO-E identifies this as realised aggregated generation per type.
 
-Production types must be retained from the source so downstream processing can identify categories such as:
+Production type must be preserved exactly as provided by the source.
 
-- wind
-- solar
-- nuclear
-- gas
-- hydro
-- coal
-- biomass
-- other available ENTSO-E production types
-
-Do not collapse production types during Bronze ingestion.
+Do not normalize or collapse production types in Bronze.
 
 ### Day-Ahead Electricity Prices
 
-Retrieve day-ahead prices.
+Retrieve day-ahead prices using:
 
-ENTSO-E identifies day-ahead prices using:
+- `documentType=A44`
 
-- Document type: `A44`
+Use the required bidding-zone/domain parameters according to the ENTSO-E API contract.
 
-The appropriate bidding-zone domain must be supplied for both the input and output domain as required by the ENTSO-E API.
-
-Source timestamps and prices must be preserved in Bronze.
-
-Daily average price will be calculated downstream.
+Source timestamps, price values, currency, and units must be preserved.
 
 ## Historical Backfill
 
-The ingestion must support a configurable historical backfill covering the previous 24 months.
+Support a configurable historical backfill covering the previous 24 months.
 
 The implementation must accept:
 
@@ -107,40 +96,154 @@ The implementation must accept:
 - country / bidding zone
 - dataset type
 
-The 24-month range must not be permanently hard-coded into the ingestion implementation.
+The 24-month range must not be permanently hard-coded.
 
-Large historical requests should be divided into bounded date windows rather than relying on a single multi-year request.
+Historical requests should be divided into bounded date windows.
 
-The chunking strategy must be configurable.
+The chunk size must be configurable.
+
+Do not assume every dataset supports arbitrarily large query windows.
 
 ## Daily Incremental Ingestion
 
-After historical backfill, the production workflow will execute daily.
+After historical backfill, the production workflow runs daily.
 
-The incremental execution should request the latest completed data period required by downstream processing.
+Normal incremental execution should process recent completed dates rather than permanently assuming only one date can ever be re-read.
 
-Because ENTSO-E data can occasionally be revised after initial publication, rerunning recent dates must be supported.
+The pipeline must support reprocessing previous dates because ENTSO-E values may be revised or previously missing intervals may later become available.
 
 Repeated ingestion must not create duplicate logical records.
 
+## XML Response Structure
+
+ENTSO-E responses are XML-based.
+
+The parser must handle the actual hierarchical structure:
+
+`MarketDocument`
+→ `TimeSeries`
+→ one or more `Period`
+→ `Point`
+
+Do not assume:
+
+- one response contains one TimeSeries
+- one TimeSeries contains one Period
+- one Period covers the complete requested day
+- point positions are globally unique within a TimeSeries
+
+Each Period independently defines:
+
+- start timestamp
+- end timestamp
+- resolution
+- Point positions
+
+Point positions restart relative to their containing Period.
+
+## Timestamp Derivation
+
+A Point timestamp must be derived from:
+
+- the containing Period start timestamp
+- the Period resolution
+- the Point position
+
+Conceptually:
+
+`point_timestamp = period_start + (position - 1) × resolution`
+
+Do not derive timestamps from the overall request period.
+
+Do not assume Point position `1` represents midnight.
+
+## Multiple Periods
+
+A single TimeSeries may contain multiple Period elements.
+
+This can occur when the source dataset contains separated ranges of observations.
+
+Each Period must be parsed independently and combined into the canonical Bronze representation.
+
+A gap between Periods must remain identifiable.
+
+Do not manufacture observations for missing intervals.
+
+## Partial-Day Detection
+
+A successful HTTP/XML response does not guarantee a complete day of data.
+
+The ingestion layer must preserve enough information for completeness validation.
+
+For every requested country/date/dataset, determine whether timeline coverage is:
+
+- complete
+- partial
+- unavailable
+- failed
+
+Completeness must be based primarily on expected timeline coverage and source resolution.
+
+Do not determine completeness solely from:
+
+- HTTP status
+- presence of any records
+- a hard-coded expected number of Points
+
+For example, PT15M commonly produces 96 intervals in a normal 24-hour UTC period, but this must not become a universal hard-coded rule.
+
+## Resolution
+
+Preserve the source resolution exactly.
+
+Examples:
+
+- `PT15M`
+- `PT30M`
+- `PT60M`
+
+Downstream processing will convert the resolution into interval duration.
+
+Do not normalize all observations to hourly resolution in Bronze.
+
+## Units
+
+Preserve the unit exactly as supplied by ENTSO-E.
+
+For load/generation, ENTSO-E commonly supplies:
+
+`MAW`
+
+ENTSO-E defines this code as megawatts.
+
+Bronze should retain the raw unit code.
+
+Unit normalization into canonical analytical units belongs downstream.
+
 ## Bronze Storage
 
-Each ENTSO-E dataset must be persisted in the Databricks Bronze layer using Delta.
+Each ENTSO-E dataset must be persisted in Databricks using Delta.
 
-Bronze should preserve the source structure as closely as practical.
+Bronze should preserve source information with minimal business transformation.
 
-At minimum, records must retain sufficient information to identify:
+At minimum retain sufficient information to identify:
 
 - country
 - bidding zone / domain
 - dataset type
-- source timestamp
+- TimeSeries identifier
+- Period start
+- Period end
+- Point position
+- derived source timestamp
 - source resolution
 - value
-- unit
+- raw unit
 - production type where applicable
 - currency where applicable
-- source document identifiers where available
+- document identifier
+- document revision number where available
+- source-created timestamp where available
 - ingestion timestamp
 - requested start date
 - requested end date
@@ -150,44 +253,47 @@ The source system must identify ENTSO-E.
 
 ## Raw Response Handling
 
-ENTSO-E Web API responses are XML-based.
-
-The ingestion layer must safely parse the returned XML.
-
 Unexpected response structures must fail visibly.
 
-Do not silently interpret an ENTSO-E error response as an empty dataset.
+Do not silently interpret:
 
-Where useful for debugging and traceability, raw response metadata may be retained alongside parsed Bronze records.
+- ENTSO-E error XML
+- authorization errors
+- malformed XML
+- schema changes
+
+as an empty successful dataset.
+
+Where useful, retain document-level metadata for debugging and lineage.
 
 ## Execution Environment
 
 This pipeline MUST execute on Databricks.
 
-Local execution is not supported.
+Local execution is not the supported production runtime.
 
 Python may be used for:
 
 - HTTP requests
 - XML parsing
-- control flow
 - configuration
+- control flow
 
-PySpark must be used for DataFrame-based processing and persisted Delta writes.
+PySpark must be used for DataFrame-based pipeline processing and persisted Delta writes.
 
 Do not use pandas as the pipeline-processing implementation.
 
 ## Authentication
 
-The ENTSO-E security token must be stored using Databricks-supported secret management.
+Store the ENTSO-E security token using Databricks-supported secret management.
 
-The implementation must retrieve the secret at runtime.
+Retrieve it at runtime.
 
 The token must never appear in:
 
 - source code
 - Git history
-- notebooks committed to GitHub
+- committed notebooks
 - logs
 - exception messages
 
@@ -196,51 +302,62 @@ The token must never appear in:
 The implementation must:
 
 - use HTTPS
-- define an explicit request timeout
+- use explicit request timeouts
 - validate HTTP status
 - validate ENTSO-E response content
-- use bounded retry behaviour for transient failures
-- avoid infinite retries
-- surface rate-limit or access errors clearly
-- log the country, dataset type, and date range being requested
+- use bounded retries for transient failures
+- surface access/rate-limit errors
+- log country, dataset, and requested date range
 
-A failed country/dataset request must not be silently ignored.
+A failed request must not be silently ignored.
 
 ## Configuration
 
-Separate configuration from ingestion logic.
-
-Configuration should include at minimum:
+Configuration must contain at minimum:
 
 - country code
 - country name
-- ENTSO-E domain / bidding-zone identifier
+- ENTSO-E bidding-zone/domain identifier
 - timezone
 - enabled datasets
 
-The ingestion implementation must iterate over configured countries and datasets rather than contain duplicated country-specific functions.
+The implementation must iterate over configuration.
+
+Do not implement separate duplicated ingestion logic per country.
 
 ## Time Handling
 
-ENTSO-E source timestamps must be retained accurately.
+ENTSO-E API periods and source timestamps must be handled as UTC unless the source semantics explicitly indicate otherwise.
 
-Daily downstream calculations must ultimately map source observations to the correct local calendar date.
+The API's time granularity is the same as the data published on the Transparency Platform.
 
-The implementation must account for:
+Bronze must preserve source timestamps accurately.
 
-- UTC timestamps
-- country timezone
-- daylight-saving-time changes
+Conversion to country-local calendar dates belongs downstream.
 
-Do not assume every calendar day contains exactly 24 source intervals.
+The implementation must retain enough information to correctly handle:
+
+- UTC
+- local timezone conversion
+- daylight-saving transitions
+- varying interval resolutions
+
+Do not assume every local calendar day has exactly 24 hours.
 
 ## Idempotency
 
 The ingestion design must support safe reprocessing.
 
-Deterministic identifiers or equivalent business keys must be available so repeated runs do not create duplicate logical observations.
+Construct deterministic logical identifiers using fields appropriate to the dataset, such as:
 
-A rerun may update previously ingested data if ENTSO-E has published revised values.
+- country
+- dataset type
+- source timestamp
+- production type where applicable
+
+When revised versions of an observation exist, the newest valid source version should be capable of replacing the previous state downstream.
+
+Repeated execution must not create duplicate logical observations.
 
 ## Observability
 
@@ -253,34 +370,44 @@ Each execution should expose:
 - datasets attempted
 - successful requests
 - failed requests
-- record counts written per dataset
+- complete periods
+- partial periods
+- unavailable periods
+- records written
 - retries performed
 
-Failures must be clearly visible in Databricks job execution.
+Failures and partial data must remain visible in Databricks job execution.
 
 ## Acceptance Criteria
 
 This specification is complete when:
 
-1. ENTSO-E API authentication works securely from Databricks.
+1. ENTSO-E authentication works securely from Databricks.
 2. All five configured countries can be requested.
-3. Actual electricity load is ingested.
-4. Actual generation by production type is ingested.
-5. Day-ahead prices are ingested.
+3. Actual total load can be ingested.
+4. Actual generation by production type can be ingested.
+5. Day-ahead prices can be ingested.
 6. A configurable 24-month historical backfill can be executed.
-7. Individual recent dates can be reprocessed.
+7. Recent dates can be reprocessed safely.
 8. Source data is stored as Bronze Delta data.
-9. Source timestamps and source resolution are preserved.
-10. Production types are retained.
-11. API and XML errors are surfaced clearly.
-12. Reruns do not create duplicate logical observations.
-13. No runtime dependency on the local development machine exists.
+9. Source timestamps and resolutions are preserved.
+10. Multiple TimeSeries and Period elements are handled correctly.
+11. Point timestamps are derived relative to their containing Period.
+12. Point-position resets across Periods are handled correctly.
+13. Gaps between Periods remain identifiable.
+14. Complete and partial source periods can be distinguished.
+15. Raw units such as `MAW` are retained.
+16. Production types are retained.
+17. XML/API errors are surfaced clearly.
+18. Reruns do not create duplicate logical observations.
+19. No runtime dependency on the local development machine exists.
 
 ## Out of Scope
 
 This specification does not include:
 
 - daily aggregation
+- MW-to-MWh calculation
 - renewable-percentage calculation
 - weather joins
 - Silver transformations
@@ -288,5 +415,5 @@ This specification does not include:
 - PostgreSQL publishing
 - Power BI
 - forecasting
-- streaming ingestion
+- streaming
 - cross-border electricity-flow analytics

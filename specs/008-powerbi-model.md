@@ -1,29 +1,8 @@
 # 008 — Power BI Model
 
-## Scope Note
-
-This specification exists to document the **end-to-end picture**: what a
-BI consumer of this project's PostgreSQL serving layer looks like, so
-the overall architecture (API -> Databricks -> PySpark -> dbt ->
-PostgreSQL -> BI) is legible as a whole.
-
-**Power BI itself is out of scope for this repository.** It is built and
-maintained separately, by whoever owns the BI layer, against the
-PostgreSQL contract defined in Spec 005. This repository's delivery ends
-at PostgreSQL serving — nothing here builds, deploys, or ships a
-Power BI report, `.pbix` file, or dataset.
-
-The remainder of this document describes the semantic model, measures,
-and pages a downstream Power BI consumer *should* build against the
-serving layer, as a reference contract — not as work this repository is
-responsible for delivering.
-
 ## Goal
 
-Describe a Power BI semantic model and dashboard built on top of the
-PostgreSQL serving layer, for context on the end-to-end picture. Building
-this (in Power BI Desktop, against a live PostgreSQL connection) is a
-separate, downstream effort — see "Scope Note" above.
+Build a Power BI semantic model and dashboard on top of the Aiven PostgreSQL serving layer.
 
 Power BI is the final consumption layer.
 
@@ -31,7 +10,7 @@ It must not connect directly to Databricks Bronze, Silver, or Gold datasets.
 
 ## Source
 
-Power BI must connect to PostgreSQL.
+Power BI must connect to Aiven PostgreSQL.
 
 Approved serving tables:
 
@@ -47,9 +26,9 @@ PostgreSQL is the BI-facing contract.
 
 Use the native PostgreSQL connector.
 
-For the MVP, prefer Import mode unless DirectQuery provides a clear benefit.
+For the MVP, prefer Import mode unless DirectQuery provides a clear demonstrated benefit.
 
-The dataset is intentionally small enough that Import mode should be sufficient.
+The serving dataset is intentionally compact enough for Import mode.
 
 ## Semantic Model
 
@@ -93,9 +72,45 @@ Where useful, also create:
 - 7-Day Average Price
 - 7-Day Average Demand
 
-Avoid embedding important business logic directly inside visuals.
+Important business logic should be implemented as reusable measures rather than duplicated inside visuals.
 
-Reusable logic should live in Power BI measures.
+## Null Semantics
+
+Power BI must preserve the distinction between:
+
+- valid zero
+- missing measurement
+- unavailable source data
+- incomplete source data
+
+Do not replace null measurements with zero merely for visual convenience.
+
+Examples:
+
+- unavailable demand != zero demand
+- unavailable generation != zero generation
+- missing price != zero price
+- missing weather != zero weather
+
+Visuals and measures must avoid presenting missing values as genuine zero measurements.
+
+## Incomplete Data
+
+The upstream pipeline may intentionally leave some metrics null when source data is incomplete.
+
+Power BI must respect those semantics.
+
+For example:
+
+If a country/date has incomplete ENTSO-E demand coverage, the dashboard must not display an understated demand value as though it were complete.
+
+Where appropriate, visuals may:
+
+- omit incomplete metric values
+- display blank values
+- indicate unavailable data
+
+Do not infer or interpolate missing business metrics in Power BI.
 
 ## Main Dashboard
 
@@ -107,30 +122,26 @@ The page should provide a fast summary across all five countries.
 
 Include:
 
-- latest available date
+- latest complete analytical date
 - total demand
 - average electricity price
 - renewable generation %
 - total generation
 
-Provide country and date filters.
+Provide:
+
+- country filter
+- date filter
+
+The page should be understandable within roughly 30 seconds.
 
 ## Country Comparison
 
-Create a page:
+Create:
 
 `Country Comparison`
 
-Allow users to compare:
-
-- electricity demand
-- average price
-- renewable share
-- generation mix
-- temperature
-- wind speed
-
-across:
+Allow comparison across:
 
 - Ireland
 - Germany
@@ -138,11 +149,20 @@ across:
 - Spain
 - Netherlands
 
-Visuals should prioritize comparison rather than decorative complexity.
+Metrics should include:
+
+- electricity demand
+- average electricity price
+- renewable generation %
+- total generation
+- temperature
+- wind speed
+
+Country comparisons must not treat missing values as zero.
 
 ## Energy Trends
 
-Create a page:
+Create:
 
 `Energy Trends`
 
@@ -150,39 +170,44 @@ Include daily trends for:
 
 - demand
 - day-ahead price
-- renewable percentage
+- renewable generation %
 - total generation
 
-Users should be able to select:
+Users should be able to filter by:
 
 - country
 - date range
 
+Trend lines should naturally show gaps where trusted measurements are unavailable rather than fabricating values.
+
 ## Generation Mix
 
-Create a page:
+Create:
 
 `Generation Mix`
 
 Show:
 
 - generation by production type
-- renewable vs non-renewable contribution
+- renewable vs non-renewable generation
 - generation-share percentage
 
-Support country and date filtering.
+Support:
 
-Do not hide meaningful smaller generation categories purely for visual simplicity.
+- country filtering
+- date filtering
+
+Do not hide meaningful smaller production types solely for decorative simplicity.
+
+Generation percentages should only be interpreted for dates where the upstream generation dataset is sufficiently complete.
 
 ## Weather & Energy
 
-Create a page:
+Create:
 
 `Weather & Energy`
 
-The goal is to visually explore relationships between weather and energy metrics.
-
-Include relationships such as:
+Use this page to explore relationships such as:
 
 - temperature vs electricity demand
 - wind speed vs renewable generation
@@ -190,22 +215,58 @@ Include relationships such as:
 
 This page is exploratory.
 
-Do not imply causation purely from visual correlation.
+Do not imply causation from correlation alone.
+
+Missing measurements should be excluded from correlation-style visuals rather than replaced with zero.
+
+## Latest Complete Analytical Date
+
+The dashboard must distinguish between:
+
+- latest workflow execution
+- latest PostgreSQL publication
+- latest source date
+- latest complete analytical date
+
+The main dashboard should primarily communicate the:
+
+`latest complete analytical date`
+
+for trusted metrics.
+
+Do not label a partially available date as the latest complete dataset.
 
 ## Refresh Metadata
 
-The dashboard must visibly communicate freshness.
+The dashboard should visibly expose freshness.
 
-At minimum show:
+Where available, show:
 
-- latest available data date
-- last successful serving refresh timestamp if available
+- latest complete analytical date
+- last successful PostgreSQL publication timestamp
+- last successful pipeline refresh timestamp
 
-Users should be able to tell whether they are viewing current or stale data.
+These values must not be treated as equivalent.
+
+A pipeline may run successfully without receiving complete new source data.
+
+## Data Availability Indicators
+
+Where useful, expose simple data-availability indicators.
+
+Potential statuses:
+
+- complete
+- partial
+- unavailable
+
+Do not overwhelm the dashboard with engineering metadata.
+
+The primary purpose remains analytical consumption, but users should be able to understand why a metric is blank.
 
 ## Date Behaviour
 
-Use `dim_date` as the primary date dimension.
+Use `dim_date` as the canonical date dimension.
 
 Mark it as the model's date table where appropriate.
 
@@ -213,59 +274,59 @@ Use it consistently for:
 
 - filtering
 - time intelligence
-- trend visuals
+- daily trends
+- previous-day calculations
+- rolling calculations
 
-Do not create disconnected date logic independently in each fact table.
+Do not create independent date dimensions in individual fact tables.
+
+## Time Intelligence
+
+Time-intelligence measures must account for missing analytical days.
+
+For example:
+
+A previous-day comparison should not blindly interpret missing previous-day data as zero.
+
+Where a comparison cannot be calculated because a required trusted metric is absent, return blank rather than misleading percentage changes.
 
 ## Country Behaviour
 
 Use `dim_country` as the single country dimension.
 
-Country names/codes should come from the dimension rather than repeated fact-table columns where possible.
+Country names, codes, timezone, and reference location should come from the dimension.
 
-## DAX
+Avoid maintaining separate country lookup logic inside individual reports.
+
+## DAX Responsibilities
 
 Use DAX for:
 
 - reusable measures
 - time intelligence
-- presentation-level calculations
+- presentation-layer calculations
+- comparisons
+- rolling averages
 
-Do not recreate transformations in DAX that properly belong in Silver or dbt Gold.
+Do not recreate upstream data engineering logic in DAX.
 
-Examples of logic that should stay upstream:
+The following belong upstream:
 
+- MW-to-MWh conversion
+- interval-duration handling
 - renewable classification
-- generation normalization
-- demand energy calculation
+- production-type normalization
+- completeness determination
 - country/date keys
 - source cleaning
 
-## Visual Design
+## Metric Units
 
-Prioritize:
-
-- readability
-- consistent units
-- clear labels
-- restrained number of visuals
-- meaningful comparisons
-- obvious filters
-
-Avoid:
-
-- excessive gauges
-- unnecessary 3D visuals
-- decorative charts with little analytical value
-- duplicated KPIs across every page
-
-## Units
-
-Display units clearly.
+Display units clearly and consistently.
 
 Examples:
 
-- demand: MWh or GWh where appropriate
+- demand: MWh or GWh
 - generation: MWh or GWh
 - price: EUR/MWh
 - renewable share: %
@@ -273,72 +334,164 @@ Examples:
 - wind speed: km/h
 - solar radiation: MJ/m²
 
-Use consistent unit conventions across pages.
+Power BI may scale MWh to GWh for readability, but underlying measure semantics must remain clear.
+
+## Negative Prices
+
+Negative electricity prices are valid.
+
+Visuals must support displaying:
+
+- positive prices
+- zero prices
+- negative prices
+
+Do not clamp negative values to zero.
+
+## Renewable Percentage
+
+Renewable percentage should display only where upstream calculation is valid.
+
+Do not calculate a fallback renewable percentage independently in Power BI if the Gold model already provides the approved business metric.
+
+## Generation Share
+
+Use the Gold model's approved generation-share semantics.
+
+Do not independently recompute generation shares using incomplete subsets of generation data.
+
+## Visual Design
+
+Prioritize:
+
+- readability
+- restrained number of visuals
+- consistent units
+- clear titles
+- meaningful comparisons
+- useful filters
+- obvious date context
+
+Avoid:
+
+- unnecessary gauges
+- decorative 3D charts
+- excessive visual density
+- duplicated KPIs
+- misleading zero-filled charts
+
+## KPI Behaviour
+
+KPI cards should return blank or an explicit unavailable state when the relevant trusted metric does not exist.
+
+Do not display:
+
+`0`
+
+simply because no valid metric was published.
+
+## Tooltips
+
+Where useful, tooltips may expose additional context such as:
+
+- date
+- country
+- reference location
+- source freshness
+
+Do not expose raw technical implementation details unless they improve interpretation.
 
 ## Performance
 
-The serving dataset is intentionally compact.
-
-Avoid unnecessary calculated columns where measures are more appropriate.
+The PostgreSQL serving dataset is intentionally compact.
 
 Keep the semantic model simple.
 
-Do not introduce aggregations or composite models unless actual performance requires them.
+Avoid unnecessary:
 
-## Data Quality Visibility
+- calculated columns
+- duplicate tables
+- composite models
+- aggregation tables
 
-The dashboard should not silently present known-invalid data.
+unless actual performance testing justifies them.
 
-Only data successfully published through the validated PostgreSQL serving layer should be consumed.
+## Data Quality Protection
 
-Where useful, expose freshness or availability indicators.
+Power BI consumes only data that passed the approved serving pipeline.
+
+Known-invalid Gold runs must not be published as current serving data.
+
+Power BI should not contain corrective logic intended to compensate for failed upstream quality checks.
 
 ## Portfolio Goal
 
-The Power BI output should demonstrate that the engineering pipeline produces usable business-facing analytics.
+The dashboard should demonstrate that the engineering pipeline produces useful analytical outcomes.
 
-It should be understandable within roughly 30 seconds by someone viewing the portfolio.
+A reviewer should quickly understand:
 
-The dashboard should visually reinforce the underlying engineering story:
+- European energy comparison
+- renewable generation differences
+- electricity-price behaviour
+- demand trends
+- weather relationships
 
-API data
-→ Databricks
-→ PySpark
-→ dbt
-→ PostgreSQL
-→ Power BI
+The dashboard should complement the engineering project rather than become the entire project.
+
+## Portfolio Narrative
+
+The intended architecture visible from the portfolio is:
+
+```text
+ENTSO-E + Open-Meteo
+        ↓
+Databricks Bronze
+        ↓
+PySpark Silver
+        ↓
+dbt Gold
+        ↓
+Aiven PostgreSQL
+        ↓
+Power BI
+```
+
+The Power BI layer should make the final analytical value of that pipeline obvious.
 
 ## Acceptance Criteria
 
 This specification is complete when:
 
-1. Power BI connects successfully to PostgreSQL.
+1. Power BI connects successfully to Aiven PostgreSQL.
 2. All approved serving tables are loaded.
 3. Dimension/fact relationships are configured correctly.
 4. Core reusable measures exist.
-5. An overview page is implemented.
-6. Country comparison is implemented.
-7. Energy trend analysis is implemented.
-8. Generation mix analysis is implemented.
-9. Weather-energy analysis is implemented.
-10. Country/date filtering works consistently.
-11. Data freshness is visible.
-12. Business logic is not unnecessarily duplicated in Power BI.
-13. The dashboard is clear enough for portfolio demonstration.
-14. Power BI does not directly query Databricks.
+5. An overview page exists.
+6. Country comparison exists.
+7. Energy trend analysis exists.
+8. Generation mix analysis exists.
+9. Weather-energy exploration exists.
+10. Country and date filters work consistently.
+11. `dim_date` is used consistently for time intelligence.
+12. Missing metrics are not silently converted to zero.
+13. Incomplete upstream metrics are not presented as trusted values.
+14. Negative electricity prices display correctly.
+15. Latest complete analytical date is distinguishable from refresh timestamp.
+16. Power BI does not recreate upstream engineering logic.
+17. Power BI does not query Databricks directly.
+18. The dashboard is understandable and portfolio-ready.
 
 ## Out of Scope
 
 This specification does not include:
 
-- building, deploying, or maintaining the actual Power BI report/`.pbix`
-  from this repository (see "Scope Note" above — that is a separate,
-  downstream effort)
 - Power BI Premium
-- Fabric
+- Microsoft Fabric
 - streaming dashboards
+- Direct Lake
 - write-back
 - row-level security
 - embedded Power BI
 - mobile-specific layouts
 - machine-learning predictions
+- Power BI-based data cleansing

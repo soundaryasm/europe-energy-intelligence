@@ -4,7 +4,7 @@
 
 Ingest weather data for the five MVP countries into Databricks and maintain a reliable historical + daily weather dataset.
 
-The analytical output of this pipeline is daily by country.
+The analytical grain for the MVP is daily by country.
 
 ## Countries
 
@@ -16,9 +16,7 @@ The MVP covers:
 - Spain
 - Netherlands
 
-Each country must have one configured reference location.
-
-For MVP, use the capital city as the weather proxy:
+Use one configured reference location per country:
 
 | Country | Reference Location |
 |---|---|
@@ -28,138 +26,180 @@ For MVP, use the capital city as the weather proxy:
 | Spain | Madrid |
 | Netherlands | Amsterdam |
 
-Coordinates must be defined in configuration and must not be duplicated throughout application code.
+Coordinates and timezone must be maintained centrally in configuration.
 
-This is a deliberate MVP simplification.
-
-Weather values represent the configured reference location and must not be described as a geographically averaged national weather measurement.
+Weather represents the configured reference location and must not be described as a geographically averaged national measurement.
 
 ## Source
 
-Use the Open-Meteo Historical Weather API for historical weather ingestion.
+Use Open-Meteo.
 
-Base endpoint:
+### Historical Backfill
+
+Use the Historical Weather API:
 
 `https://archive-api.open-meteo.com/v1/archive`
 
-Open-Meteo requires latitude and longitude and supports explicit start and end dates.
+### Daily Incremental Load
 
-No API key is required for the public non-commercial API used by this project.
+For recently completed weather data, use the Open-Meteo Forecast API with its supported past-day functionality where appropriate.
+
+Do not unnecessarily depend on historical/reanalysis data availability for the normal daily pipeline.
+
+Historical and daily ingestion may use different Open-Meteo endpoints while producing the same canonical Bronze contract.
+
+No API key is required for the approved public non-commercial usage.
 
 ## Required Weather Metrics
 
-The resulting daily dataset must provide:
+Retrieve daily:
 
-- average temperature
-- average wind speed
-- solar radiation
+- mean temperature at 2 metres
+- mean wind speed at 10 metres
+- shortwave radiation sum
 
-Target units:
+Canonical output units:
 
-- temperature: Celsius
+- temperature: °C
 - wind speed: km/h
 - solar radiation: MJ/m²
 
-## Source Granularity
+Use Open-Meteo daily variables where available rather than retrieving hourly observations solely to calculate daily averages.
 
-The project's analytical grain remains daily.
-
-However, Open-Meteo's Historical Weather API does not currently expose daily mean temperature and daily mean wind speed as documented daily variables.
-
-Therefore this ingestion is explicitly allowed to retrieve hourly:
-
-- `temperature_2m`
-- `wind_speed_10m`
-
-Daily averages will be calculated downstream using PySpark.
-
-For solar radiation, retrieve:
-
-- `shortwave_radiation_sum`
-
-as a daily variable from Open-Meteo.
-
-Hourly source data exists only because it is required to derive the approved daily metrics.
-
-Hourly analytics are NOT part of the MVP.
+The MVP does not require hourly weather ingestion.
 
 ## Historical Backfill
 
-The initial execution must support a configurable historical backfill covering the previous 24 months.
+The initial execution must support a configurable backfill covering the previous 24 months.
 
-The date range must not be permanently hard-coded.
-
-The ingestion implementation should accept:
+The implementation must accept:
 
 - `start_date`
 - `end_date`
 
-so the same code can be reused for both historical and incremental execution.
+The historical range must not be permanently hard-coded.
 
 ## Daily Incremental Ingestion
 
-After the initial backfill, the pipeline will run daily as part of the Databricks workflow.
+After backfill, ingestion runs as part of the daily Databricks workflow.
 
-The daily execution must ingest the latest completed day's weather data.
+The normal execution should ingest the latest completed weather day required by the pipeline.
 
-The ingestion must support rerunning a previously processed date.
+The implementation must also support explicitly reprocessing previous dates.
 
-A rerun must not cause duplicate downstream records.
+Reruns must not create duplicate logical records.
 
 ## Bronze Storage
 
-Raw weather data must be persisted in Databricks Delta storage.
+Persist weather data in Databricks using Delta.
 
-The Bronze layer should preserve source-level information with minimal transformation.
-
-Bronze data must include enough information to identify:
+The Bronze dataset must retain sufficient information to identify:
 
 - country
-- reference location
-- latitude
-- longitude
-- timestamp/date
-- source variable
-- source value
+- country code
+- configured reference location
+- configured latitude
+- configured longitude
+- returned latitude
+- returned longitude
+- local date
+- returned timezone
+- configured timezone
+- UTC offset where supplied
+- mean temperature
+- mean wind speed
+- shortwave radiation sum
+- source units
+- source endpoint/type
 - ingestion timestamp
 - source system
 
-The source system value should identify Open-Meteo.
+The source system must identify Open-Meteo.
 
 Do not publish Bronze data to PostgreSQL.
 
+## Requested vs Returned Coordinates
+
+Open-Meteo may return coordinates that differ slightly from the coordinates supplied in the request because the API resolves requests to an underlying weather-model grid cell.
+
+This must not be treated as an ingestion failure.
+
+Retain both:
+
+- configured/reference-location coordinates
+- coordinates returned by Open-Meteo
+
+Do not overwrite the configured reference coordinates with returned grid coordinates.
+
+## Timezone Behaviour
+
+Every request must specify the configured timezone for the country/reference location.
+
+Examples include:
+
+- `Europe/Dublin`
+- `Europe/Berlin`
+- `Europe/Paris`
+- `Europe/Madrid`
+- `Europe/Amsterdam`
+
+Daily observations must represent the corresponding local calendar date.
+
+Do not assume Open-Meteo timestamps are UTC when an explicit timezone is requested.
+
+Retain returned timezone and UTC-offset metadata where available.
+
 ## Execution Environment
 
-This pipeline MUST run on Databricks.
+This pipeline MUST execute on Databricks.
 
-Local execution is not supported.
+Local execution is not a supported production runtime.
 
-Python may be used for HTTP communication and control flow.
+Python may be used for:
 
-PySpark must be used for DataFrame-based processing and writing persisted Delta datasets.
+- HTTP communication
+- response parsing
+- configuration
+- control flow
 
-Do not use pandas as the processing implementation.
+PySpark must be used for persisted DataFrame processing and Delta writes where applicable.
+
+Do not introduce pandas as the pipeline-processing implementation.
 
 ## API Behaviour
 
 The implementation must:
 
 - use HTTPS
-- define an explicit request timeout
-- validate HTTP response status
-- fail clearly when the API request fails
-- avoid silently writing incomplete responses
-- log the country and requested date range being processed
+- use explicit request timeouts
+- validate HTTP status
+- validate expected response structure
+- detect API error responses
+- avoid silently accepting malformed or incomplete responses
+- log country and requested date range
+- use bounded retries for transient failures
 
-Transient HTTP failures should support limited retry behaviour.
+Retries must never be infinite.
 
-Retries must be bounded.
+## Response Validation
+
+Open-Meteo responses use arrays for returned variables.
+
+The implementation must verify that:
+
+- required daily fields exist
+- date arrays are present
+- measurement arrays align with their corresponding date arrays
+- required units are present or known
+- requested dates are represented where data is expected
+
+Do not independently process parallel arrays in a manner that could misalign dates and measurements.
 
 ## Configuration
 
-Country metadata must be separated from ingestion logic.
+Country metadata must be separate from ingestion logic.
 
-Configuration should contain at minimum:
+Configuration must contain at minimum:
 
 - country code
 - country name
@@ -168,64 +208,75 @@ Configuration should contain at minimum:
 - longitude
 - timezone
 
-Application logic must iterate over configured countries rather than contain five duplicated country-specific implementations.
+The ingestion implementation must iterate over configuration.
 
-## Timezones
-
-Requests and transformations must preserve enough timezone information to associate observations with the correct local calendar date.
-
-Do not assume every country uses the same timezone.
-
-Daily aggregation must ultimately represent the local date associated with each configured country.
+Do not create separate hard-coded implementations for each country.
 
 ## Idempotency
 
-The ingestion design must permit the same country/date range to be processed multiple times safely.
+The same country/date may be processed multiple times safely.
 
-Repeated ingestion must not result in duplicate logical records after the pipeline completes.
+Use a deterministic logical key equivalent to:
 
-The implementation should use deterministic business keys where applicable.
+`country + local_date`
+
+Repeated ingestion must update/reconcile the existing logical observation rather than create duplicates.
+
+## Data Availability
+
+The ingestion process must distinguish between:
+
+- successful response with expected data
+- valid response with data not yet available
+- malformed response
+- network/API failure
+
+An empty or missing daily value must not automatically be converted to zero.
 
 ## Observability
 
-Each execution should make it possible to determine:
+Each execution should expose:
 
 - execution start time
 - execution end time
 - requested date range
 - countries attempted
-- countries successfully ingested
+- countries successful
 - countries failed
-- number of records written
+- records received
+- records written
+- retries performed
 
-Failures must be visible rather than silently ignored.
+Failures must remain visible in Databricks execution history.
 
 ## Acceptance Criteria
 
 This specification is complete when:
 
-1. The ingestion runs successfully on Databricks.
-2. Data is retrieved from Open-Meteo for all five configured countries.
-3. A configurable 24-month historical backfill can be executed.
-4. Individual dates can also be ingested for daily incremental processing.
-5. Raw source data is persisted as Delta data in the Databricks Bronze layer.
-6. Temperature and wind observations required for downstream daily averages are available.
-7. Daily solar radiation is available.
-8. Country and reference-location metadata are retained.
-9. The process can be safely rerun without producing duplicate logical data.
-10. API failures are surfaced clearly.
-11. No runtime dependency on the developer's local machine exists.
+1. Open-Meteo ingestion executes successfully on Databricks.
+2. All five configured countries can be processed.
+3. Daily mean temperature is retrieved.
+4. Daily mean wind speed is retrieved.
+5. Daily shortwave radiation sum is retrieved.
+6. A configurable 24-month historical backfill can be executed.
+7. Recent completed days can be ingested incrementally.
+8. Individual historical dates can be reprocessed.
+9. Data is persisted as Bronze Delta data.
+10. Both configured and returned coordinates are retained.
+11. Timezone behaviour preserves the correct local calendar date.
+12. Reruns do not create duplicate logical observations.
+13. API/data-availability failures are surfaced clearly.
+14. No runtime dependency on the local development machine exists.
 
 ## Out of Scope
 
 This specification does not include:
 
 - ENTSO-E ingestion
-- daily weather aggregation
+- hourly weather analytics
 - Silver transformations
 - dbt models
 - PostgreSQL publishing
 - Power BI
-- hourly analytical reporting
 - multiple weather locations per country
-- weather forecasting
+- forecasting as an analytical feature

@@ -21,7 +21,37 @@ dbt MUST execute against Databricks.
 
 The dbt project may be edited locally but must not use the local machine as the production runtime.
 
-Do not create a separate local database for dbt execution.
+Do not create:
+
+- a local dbt production runtime
+- a separate local analytical database
+- local substitutes for Databricks execution
+
+## dbt Runtime
+
+The dbt project MUST run using a Databricks Lakeflow Jobs `dbt` task.
+
+The dbt task must:
+
+- use the dbt project stored in the Databricks Git-backed project
+- use `dbt-databricks`
+- execute generated SQL against a Databricks SQL Warehouse
+- use the approved Databricks catalog/schema
+- execute entirely within Databricks
+
+Do not depend on the repository's shared `requirements.txt` for the dbt runtime.
+
+Do not use:
+
+- `dbt-spark`
+- a locally running dbt production process
+- a locally hosted database
+
+The dbt task must explicitly install and pin:
+
+`dbt-databricks==<approved-version>`
+
+The exact version must be selected and recorded when this specification is implemented based on the supported Databricks/dbt combination at that time.
 
 ## Inputs
 
@@ -34,9 +64,36 @@ dbt models must consume the Silver datasets:
 
 dbt must not query Bronze datasets directly.
 
+Silver datasets must be declared as dbt sources.
+
+## Trusted Silver Inputs
+
+Gold models must consume only trusted Silver records.
+
+Records classified as:
+
+- `partial`
+- `unavailable`
+- `invalid`
+
+must not silently contribute to trusted Gold metrics.
+
+For example, if ENTSO-E demand for a country/date has incomplete timeline coverage, `daily_demand_mwh` must not contain an understated value derived from the partial day.
+
+Gold must distinguish between:
+
+- valid zero measurement
+- missing measurement
+- unavailable source data
+- incomplete source data
+
+Do not use `COALESCE(..., 0)` purely to make missing data appear complete.
+
+Absence of a trusted measurement should remain null where appropriate.
+
 ## Required Gold Models
 
-Create the following models:
+Create:
 
 - `dim_country`
 - `dim_date`
@@ -44,11 +101,13 @@ Create the following models:
 - `fact_weather_daily`
 - `fact_generation_mix_daily`
 
-These models are also the initial datasets intended for PostgreSQL publishing.
+These models form the initial contract with the PostgreSQL serving layer.
 
 ## dim_country
 
-One row per MVP country.
+Grain:
+
+`one row per MVP country`
 
 Required fields:
 
@@ -59,7 +118,7 @@ Required fields:
 - `timezone`
 - `entsoe_domain`
 
-The dimension must contain exactly the configured MVP countries:
+The dimension must contain exactly:
 
 - Ireland
 - Germany
@@ -69,11 +128,18 @@ The dimension must contain exactly the configured MVP countries:
 
 Use a stable deterministic key strategy.
 
+Country keys must not depend on execution order or generated sequence values that could change between rebuilds.
+
 ## dim_date
 
-One row per calendar date required by the project.
+Grain:
 
-The date dimension should cover at least the full historical backfill range and ongoing future daily loads.
+`one row per calendar date`
+
+The dimension must cover at least:
+
+- the complete 24-month historical backfill
+- all dates subsequently processed by the daily pipeline
 
 Required fields:
 
@@ -97,7 +163,11 @@ Grain:
 
 `country + date`
 
-Combine daily demand and electricity-price data.
+Combine trusted daily:
+
+- electricity demand
+- electricity price
+- generation totals
 
 Required fields:
 
@@ -111,13 +181,23 @@ Required fields:
 - `renewable_generation_mwh`
 - `renewable_generation_pct`
 
+Metrics must only be populated from Silver inputs satisfying their required completeness rules.
+
+Absence of a trusted metric must remain null rather than being represented as zero.
+
+Renewable generation:
+
+`renewable_generation_mwh = SUM(generation_mwh WHERE renewable_flag = true)`
+
 Renewable percentage:
 
 `renewable_generation_mwh / total_generation_mwh * 100`
 
-Handle zero-generation cases explicitly.
+Zero-generation cases must be handled explicitly.
 
-Do not silently divide by zero.
+Do not divide by zero.
+
+Do not replace an undefined renewable percentage with zero unless zero is semantically correct.
 
 ## fact_weather_daily
 
@@ -133,6 +213,10 @@ Required fields:
 - `avg_wind_speed_kmh`
 - `solar_radiation_mj_m2`
 - `reference_location`
+
+Weather measurements should preserve nulls when trusted source values are unavailable.
+
+Do not convert missing weather measurements to zero.
 
 ## fact_generation_mix_daily
 
@@ -153,30 +237,34 @@ Generation share:
 
 `production_type_generation_mwh / total_daily_generation_mwh * 100`
 
-Handle zero-generation cases explicitly.
+Zero-generation cases must be handled explicitly.
+
+Do not divide by zero.
+
+Only trusted generation records should contribute to generation-share calculations.
 
 ## Modelling Principles
 
 Gold models should expose clear business concepts.
 
-Avoid leaking unnecessary source-specific fields into Gold.
+Avoid leaking unnecessary source-specific implementation details into Gold.
 
-Retain source-specific identifiers only when they provide meaningful analytical value.
+Retain source-specific identifiers only where they provide meaningful analytical value.
 
-Prefer readable business names over raw upstream field names.
+Prefer readable analytical names over raw upstream field names.
+
+Business calculations should be centralized in dbt rather than duplicated across Power BI or PostgreSQL.
 
 ## Materialization
 
-Choose dbt materializations appropriate for the dataset size and refresh pattern.
+Choose dbt materializations appropriate for dataset size and refresh behaviour.
 
-For MVP:
+For the MVP:
 
 - dimensions may be tables
 - daily fact models should be persisted tables or incremental models where justified
 
-Do not introduce complex incremental logic purely for demonstration.
-
-Any incremental model must remain safe for rerunning recent dates.
+Do not introduce complex incremental patterns purely to demonstrate dbt features.
 
 ## Incremental Behaviour
 
@@ -184,10 +272,13 @@ Where incremental models are used:
 
 - use stable unique keys
 - support reprocessing recent dates
-- update changed records
+- update revised records
 - avoid duplicate facts
+- support ENTSO-E revisions
 
-The project must support ENTSO-E revisions to previously ingested dates.
+Rebuilding or reprocessing a country/date must result in one correct logical Gold record.
+
+Previously missing or incomplete metrics must be capable of being populated later when trusted Silver data becomes available.
 
 ## Relationships
 
@@ -211,77 +302,169 @@ Expected relationships:
 `fact_generation_mix_daily.date_key`
 → `dim_date.date_key`
 
+Use dbt `ref()` relationships to express dependencies.
+
+Avoid manually hard-coding execution order where dbt lineage can express it.
+
 ## dbt Tests
 
-At minimum implement:
+At minimum implement the following tests.
 
-### Dimension Tests
+### dim_country
 
-`dim_country`
+Validate:
 
-- `country_key` unique
-- `country_key` not null
-- `country_code` unique
-- `country_code` not null
+- `country_key` is unique
+- `country_key` is not null
+- `country_code` is unique
+- `country_code` is not null
+- exactly five configured MVP countries exist
 
-`dim_date`
+### dim_date
 
-- `date_key` unique
-- `date_key` not null
-- `date` unique
-- `date` not null
+Validate:
 
-### Fact Tests
+- `date_key` is unique
+- `date_key` is not null
+- `date` is unique
+- `date` is not null
 
-All foreign keys must be non-null.
+### fact_energy_daily
 
-Relationship tests must confirm country and date keys exist in their dimensions.
+Validate grain:
 
-The logical grain must be unique:
+`country_key + date_key`
 
-`fact_energy_daily`
-- unique country/date
+Validate:
 
-`fact_weather_daily`
-- unique country/date
+- logical grain is unique
+- foreign keys are not null
+- country relationship is valid
+- date relationship is valid
 
-`fact_generation_mix_daily`
-- unique country/date/production_type
+### fact_weather_daily
+
+Validate grain:
+
+`country_key + date_key`
+
+Validate:
+
+- logical grain is unique
+- foreign keys are not null
+- country relationship is valid
+- date relationship is valid
+
+### fact_generation_mix_daily
+
+Validate grain:
+
+`country_key + date_key + production_type`
+
+Validate:
+
+- logical grain is unique
+- foreign keys are not null
+- production type is not null
+- country relationship is valid
+- date relationship is valid
 
 ## Business Validation
 
 At minimum validate:
 
-- renewable percentage between 0 and 100 where calculable
-- generation share between 0 and 100 where calculable
-- demand is non-negative
-- total generation is non-negative
-- weather wind speed is non-negative
+### Energy
 
-Negative electricity prices remain valid.
+- demand is non-negative where present
+- total generation is non-negative where present
+- renewable generation is non-negative where present
+- renewable generation does not exceed total generation beyond accepted numerical tolerance
+- renewable percentage is between 0 and 100 where calculable
+
+### Generation Mix
+
+- generation is non-negative
+- generation share is between 0 and 100 where calculable
+- renewable flag is present
+- daily generation shares approximately sum to 100 where the generation dataset is complete
+
+### Weather
+
+- wind speed is non-negative where present
+- solar radiation is non-negative where present
+
+### Prices
+
+Negative electricity prices are valid.
+
+Do not reject them.
+
+## Cross-Model Reconciliation
+
+For each complete:
+
+`country + date`
+
+validate that:
+
+`fact_energy_daily.total_generation_mwh`
+
+reconciles with the sum of:
+
+`fact_generation_mix_daily.generation_mwh`
+
+within an appropriate numerical tolerance.
+
+Similarly:
+
+`fact_energy_daily.renewable_generation_mwh`
+
+must reconcile with the generation-mix rows classified as renewable.
+
+Material discrepancies must fail or surface through dbt testing rather than remaining silent.
+
+## Null Semantics
+
+Null must retain its analytical meaning.
+
+Do not automatically transform null values into zero.
+
+Examples:
+
+- missing demand != zero demand
+- missing price != zero price
+- unavailable generation != zero generation
+- missing weather != zero weather
+
+Dimension keys required for an existing fact record must not be null.
 
 ## Documentation
 
-dbt models and important columns should have descriptions.
+dbt models and important columns must have descriptions.
 
-The dbt project should make it possible for someone unfamiliar with the ingestion implementation to understand:
+Documentation should allow someone unfamiliar with ingestion code to understand:
 
 - model grain
 - business meaning
 - upstream dependency
-- important calculated metrics
+- calculated metrics
+- units
+- important null semantics
 
 ## Lineage
 
-dbt dependencies must reflect actual model relationships.
+dbt dependencies must accurately reflect model relationships.
 
-Avoid hard-coded execution ordering where dbt `ref()` relationships can express dependencies.
+Use:
 
-Silver datasets should be declared as dbt sources.
+- `source()` for Silver inputs
+- `ref()` for dbt model dependencies
+
+Avoid bypassing dbt lineage with hard-coded fully qualified downstream model references where unnecessary.
 
 ## PostgreSQL Contract
 
-The five required Gold models form the initial contract with the serving layer:
+The following Gold models form the initial serving contract:
 
 - `dim_country`
 - `dim_date`
@@ -289,42 +472,44 @@ The five required Gold models form the initial contract with the serving layer:
 - `fact_weather_daily`
 - `fact_generation_mix_daily`
 
-Changes to their grain or required fields must be treated as serving-contract changes.
+Changes to:
+
+- model grain
+- required fields
+- field meaning
+- key strategy
+
+must be treated as serving-contract changes.
+
+PostgreSQL must consume these curated models rather than recreating Gold business logic.
 
 ## Acceptance Criteria
 
 This specification is complete when:
 
-1. dbt executes successfully against Databricks.
-2. Silver datasets are declared as dbt sources.
-3. All five required Gold models exist.
-4. Gold facts follow the documented grains.
-5. Renewable generation percentage is calculated correctly.
-6. Generation share percentage is calculated correctly.
-7. Dimensions use stable keys.
-8. dbt uniqueness and not-null tests pass.
-9. Foreign-key relationship tests pass.
-10. Business-validation tests pass.
-11. Models and important columns are documented.
-12. Gold models are persisted in Databricks.
-13. Gold models are ready for PostgreSQL publishing.
-14. No local runtime dependency exists.
-
-## dbt Runtime Dependency
-
-The dbt project must run using a Databricks Lakeflow Jobs `dbt` task.
-
-Do not depend on the repository's shared `requirements.txt` for the dbt runtime.
-
-The dbt task must explicitly install and pin:
-
-`dbt-databricks==<approved-version>`
-
-Do not use `dbt-spark`.
-
-The exact version should be selected and recorded when Spec 004 is implemented, based on the currently supported Databricks/dbt combination.
-
-The dbt task must execute dbt Core on Databricks compute and execute generated SQL against the configured Databricks SQL Warehouse.
+1. dbt executes successfully on Databricks.
+2. A Databricks Lakeflow Jobs `dbt` task is used.
+3. `dbt-databricks` is explicitly pinned for the dbt runtime.
+4. Generated SQL executes against the configured Databricks SQL Warehouse.
+5. Silver datasets are declared as dbt sources.
+6. All five required Gold models exist.
+7. Gold facts follow their documented grains.
+8. Only trusted Silver records contribute to trusted Gold metrics.
+9. Partial or unavailable Silver measurements are not silently converted to zero.
+10. Renewable generation is calculated correctly.
+11. Renewable generation percentage is calculated correctly.
+12. Generation-share percentage is calculated correctly.
+13. Dimensions use stable deterministic keys.
+14. Uniqueness tests pass.
+15. Required not-null tests pass.
+16. Foreign-key relationship tests pass.
+17. Business-validation tests pass.
+18. Generation totals reconcile across Gold models.
+19. Models and important columns are documented.
+20. dbt lineage accurately represents dependencies.
+21. Gold models are persisted in Databricks.
+22. Gold models are ready for PostgreSQL publishing.
+23. No local runtime dependency exists.
 
 ## Out of Scope
 
