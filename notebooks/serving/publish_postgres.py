@@ -28,11 +28,7 @@ gold_catalog = dbutils.widgets.get("gold_catalog")
 secret_scope = dbutils.widgets.get("secret_scope")
 
 # Connection URL retrieved via Databricks-managed secrets only — never
-# hard-coded, never logged, never committed. Most managed PostgreSQL
-# providers hand out one connection URL rather than separate fields;
-# discrete POSTGRES_HOST/USER/etc. env vars remain supported as a
-# fallback (see src/serving/postgres_connection.py) if that's what a
-# given provider exposes instead.
+# hard-coded, never logged, never committed.
 os.environ["POSTGRES_URL"] = dbutils.secrets.get(scope=secret_scope, key="url")
 
 # COMMAND ----------

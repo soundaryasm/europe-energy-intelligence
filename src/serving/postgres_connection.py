@@ -1,27 +1,25 @@
 """PostgreSQL connection handling (Spec 005).
 
 Provider-agnostic: this connects to any standard PostgreSQL instance
-(managed or self-hosted) via a connection URL or plain connection
-parameters — nothing here is specific to a particular hosting provider.
+(managed or self-hosted) via a single connection URL — nothing here is
+specific to a particular hosting provider.
 
-Credentials are retrieved at runtime only, from the environment, and
-never hard-coded. On Databricks these environment variables must be
-populated from Databricks-managed secrets before this module is used
-(e.g. in a notebook `os.environ[...] = dbutils.secrets.get(...)`) —
-never logged, never committed.
+The connection URL is retrieved at runtime only, from the `POSTGRES_URL`
+environment variable, and never hard-coded. On Databricks it must be
+populated from a Databricks-managed secret before this module is used
+(e.g. in a notebook `os.environ["POSTGRES_URL"] = dbutils.secrets.get(...)`)
+— never logged, never committed.
 
-Most managed PostgreSQL providers hand out a single connection URL
-(`postgres://user:password@host:port/dbname?sslmode=require`) rather
-than separate host/user/password fields, so that is the primary,
-preferred input here (`POSTGRES_URL`). Discrete `POSTGRES_HOST` /
-`POSTGRES_PORT` / etc. env vars remain supported as a fallback for
-providers or setups that expose credentials that way instead.
-
-No code in this repository calls `connect()` against a real database.
-No PostgreSQL credentials are available in this environment, so an
-actual connection has not been attempted or verified anywhere in this
-codebase (Spec 005's live-database integration is a documented blocker —
-see the project status notes).
+No automated test in this repository calls `connect()` against a real
+database — that stays intentionally true (Spec 005's live-database
+integration must not be faked in CI). Basic connectivity via
+`POSTGRES_URL` (including its `sslmode` query parameter) has been
+manually confirmed to work with `psycopg.connect()` outside this
+codebase's test suite, which validates the assumptions
+`_config_from_url()`/`as_connect_kwargs()` are built on. The DDL in
+`postgres_schema.py` and the upsert logic in `postgres_publisher.py`
+have not themselves been exercised against a real database yet — that
+remains an open integration step.
 """
 from __future__ import annotations
 
@@ -31,23 +29,15 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 POSTGRES_URL_ENV_VAR = "POSTGRES_URL"
 
-PG_HOST_ENV_VAR = "POSTGRES_HOST"
-PG_PORT_ENV_VAR = "POSTGRES_PORT"
-PG_DB_ENV_VAR = "POSTGRES_DB"
-PG_USER_ENV_VAR = "POSTGRES_USER"
-PG_PASSWORD_ENV_VAR = "POSTGRES_PASSWORD"
-PG_SSLMODE_ENV_VAR = "POSTGRES_SSLMODE"
-
 DEFAULT_PORT = 5432
 DEFAULT_SSLMODE = "require"
 DEFAULT_CONNECT_TIMEOUT_SECONDS = 10
 
 _URL_SCHEMES = ("postgres", "postgresql")
-_REQUIRED_ENV_VARS = (PG_HOST_ENV_VAR, PG_DB_ENV_VAR, PG_USER_ENV_VAR, PG_PASSWORD_ENV_VAR)
 
 
 class MissingCredentialsError(RuntimeError):
-    """Raised when required PostgreSQL connection details are not available."""
+    """Raised when `POSTGRES_URL` is missing or cannot be parsed."""
 
 
 @dataclass(frozen=True)
@@ -105,33 +95,14 @@ def _config_from_url(url: str) -> PostgresConnectionConfig:
 
 
 def load_connection_config_from_env() -> PostgresConnectionConfig:
-    """Build connection config from the environment, failing clearly if incomplete.
-
-    Prefers a single `POSTGRES_URL` connection string (the shape most
-    managed PostgreSQL providers actually hand out); falls back to
-    discrete `POSTGRES_HOST`/`POSTGRES_PORT`/etc. env vars if no URL is
-    set.
-    """
+    """Build connection config from `POSTGRES_URL`, failing clearly if unset."""
     url = os.environ.get(POSTGRES_URL_ENV_VAR)
-    if url:
-        return _config_from_url(url)
-
-    missing = [var for var in _REQUIRED_ENV_VARS if not os.environ.get(var)]
-    if missing:
+    if not url:
         raise MissingCredentialsError(
-            f"No PostgreSQL connection details found. Set {POSTGRES_URL_ENV_VAR} to a full "
-            f"connection URL, or set all of: {list(_REQUIRED_ENV_VARS)}. On Databricks, "
-            "populate these from Databricks-managed secrets before running."
+            f"{POSTGRES_URL_ENV_VAR} is not set. On Databricks, populate it from a "
+            "Databricks-managed secret before running."
         )
-
-    return PostgresConnectionConfig(
-        host=os.environ[PG_HOST_ENV_VAR],
-        port=int(os.environ.get(PG_PORT_ENV_VAR, DEFAULT_PORT)),
-        dbname=os.environ[PG_DB_ENV_VAR],
-        user=os.environ[PG_USER_ENV_VAR],
-        password=os.environ[PG_PASSWORD_ENV_VAR],
-        sslmode=os.environ.get(PG_SSLMODE_ENV_VAR, DEFAULT_SSLMODE),
-    )
+    return _config_from_url(url)
 
 
 def connect(config: PostgresConnectionConfig):
