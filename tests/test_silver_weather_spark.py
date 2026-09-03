@@ -25,19 +25,26 @@ pytestmark = pytest.mark.databricks
 IRELAND = CountryConfig("IE", "Ireland", "Dublin", 53.3498, -6.2603, "Europe/Dublin")
 
 PAYLOAD = {
-    "hourly": {
-        "time": ["2024-01-01T00:00", "2024-01-01T01:00"],
-        "temperature_2m": [4.1, 4.0],
-        "wind_speed_10m": [12.0, 11.5],
+    "latitude": 53.391914,
+    "longitude": -6.171417,
+    "timezone": "Europe/Dublin",
+    "utc_offset_seconds": 3600,
+    "daily_units": {
+        "time": "iso8601",
+        "temperature_2m_mean": "°C",
+        "wind_speed_10m_mean": "km/h",
+        "shortwave_radiation_sum": "MJ/m²",
     },
     "daily": {
         "time": ["2024-01-01"],
+        "temperature_2m_mean": [4.1],
+        "wind_speed_10m_mean": [12.0],
         "shortwave_radiation_sum": [3.2],
     },
 }
 
 
-def test_build_silver_weather_daily_aggregates_one_row_per_country_date(spark_session):
+def test_build_silver_weather_daily_normalizes_one_row_per_country_date(spark_session):
     rows = build_bronze_records(PAYLOAD, IRELAND)
     bronze_df = spark_session.createDataFrame(rows)
 
@@ -47,11 +54,10 @@ def test_build_silver_weather_daily_aggregates_one_row_per_country_date(spark_se
     row = result[0].asDict()
     assert row["country_code"] == "IE"
     assert str(row["local_date"]) == "2024-01-01"
-    assert row["avg_temperature_c"] == pytest.approx(4.05)
-    assert row["avg_wind_speed_kmh"] == pytest.approx(11.75)
+    # Direct passthrough of Open-Meteo's own daily values — no averaging.
+    assert row["avg_temperature_c"] == pytest.approx(4.1)
+    assert row["avg_wind_speed_kmh"] == pytest.approx(12.0)
     assert row["solar_radiation_mj_m2"] == pytest.approx(3.2)
-    assert row["temperature_observation_count"] == 2
-    assert row["wind_observation_count"] == 2
     assert row["reference_location"] == "Dublin"
     assert row["source_system"] == "open-meteo"
 
@@ -69,7 +75,7 @@ def test_build_silver_weather_daily_keeps_countries_separate(spark_session):
 def test_build_silver_weather_daily_dedupes_reruns_to_latest_ingestion(spark_session):
     # Two "runs" of the exact same source observation with different
     # values (simulating a rerun that fetched revised data) — only the
-    # most recently ingested value should count, not an average of both.
+    # most recently ingested value should count.
     schema_rows = [
         {
             "country_code": "IE",
@@ -78,10 +84,15 @@ def test_build_silver_weather_daily_dedupes_reruns_to_latest_ingestion(spark_ses
             "latitude": 53.3498,
             "longitude": -6.2603,
             "timezone": "Europe/Dublin",
-            "observation_timestamp": "2024-01-01T00:00",
-            "source_variable": "temperature_2m",
+            "returned_latitude": 53.391914,
+            "returned_longitude": -6.171417,
+            "returned_timezone": "Europe/Dublin",
+            "utc_offset_seconds": 3600,
+            "observation_date": "2024-01-01",
+            "source_variable": "temperature_2m_mean",
             "source_value": 999.0,  # stale value from an earlier run
-            "source_resolution": "hourly",
+            "source_unit": "°C",
+            "source_endpoint": "archive_daily",
             "source_system": "open-meteo",
             "ingestion_timestamp": datetime(2024, 1, 5, tzinfo=timezone.utc).isoformat(),
         },
@@ -92,10 +103,15 @@ def test_build_silver_weather_daily_dedupes_reruns_to_latest_ingestion(spark_ses
             "latitude": 53.3498,
             "longitude": -6.2603,
             "timezone": "Europe/Dublin",
-            "observation_timestamp": "2024-01-01T00:00",
-            "source_variable": "temperature_2m",
+            "returned_latitude": 53.391914,
+            "returned_longitude": -6.171417,
+            "returned_timezone": "Europe/Dublin",
+            "utc_offset_seconds": 3600,
+            "observation_date": "2024-01-01",
+            "source_variable": "temperature_2m_mean",
             "source_value": 4.1,  # latest, correct value
-            "source_resolution": "hourly",
+            "source_unit": "°C",
+            "source_endpoint": "archive_daily",
             "source_system": "open-meteo",
             "ingestion_timestamp": datetime(2024, 1, 6, tzinfo=timezone.utc).isoformat(),
         },
@@ -105,5 +121,4 @@ def test_build_silver_weather_daily_dedupes_reruns_to_latest_ingestion(spark_ses
     result = build_silver_weather_daily(bronze_df).collect()
 
     assert len(result) == 1
-    assert result[0].avg_temperature_c == pytest.approx(4.1)
-    assert result[0].temperature_observation_count == 1  # not 2 — the stale row was dropped
+    assert result[0].avg_temperature_c == pytest.approx(4.1)  # not 999.0 — the stale row was dropped

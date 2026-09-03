@@ -16,40 +16,64 @@ IRELAND = CountryConfig(
 )
 
 PAYLOAD = {
-    "hourly": {
-        "time": ["2024-01-01T00:00", "2024-01-01T01:00"],
-        "temperature_2m": [4.1, 4.0],
-        "wind_speed_10m": [12.0, 11.5],
+    "latitude": 53.391914,
+    "longitude": -6.171417,
+    "timezone": "Europe/Dublin",
+    "utc_offset_seconds": 3600,
+    "daily_units": {
+        "time": "iso8601",
+        "temperature_2m_mean": "°C",
+        "wind_speed_10m_mean": "km/h",
+        "shortwave_radiation_sum": "MJ/m²",
     },
     "daily": {
         "time": ["2024-01-01"],
+        "temperature_2m_mean": [4.1],
+        "wind_speed_10m_mean": [12.0],
         "shortwave_radiation_sum": [3.2],
     },
 }
 
 
-def test_build_bronze_records_produces_one_row_per_variable_observation():
+def test_build_bronze_records_produces_one_row_per_daily_variable():
     records = build_bronze_records(PAYLOAD, IRELAND)
-    # 2 hourly variables x 2 timestamps + 1 daily variable x 1 timestamp
-    assert len(records) == 5
+    # 3 daily variables x 1 date = 3 logical Bronze observations.
+    assert len(records) == 3
 
 
-def test_build_bronze_records_preserve_country_and_source_metadata():
+def test_build_bronze_records_preserve_configured_and_returned_metadata():
     records = build_bronze_records(PAYLOAD, IRELAND)
     for row in records:
         assert row["country_code"] == "IE"
         assert row["reference_location"] == "Dublin"
+        # configured reference coordinates/timezone
         assert row["latitude"] == IRELAND.latitude
         assert row["longitude"] == IRELAND.longitude
         assert row["timezone"] == "Europe/Dublin"
+        # returned Open-Meteo grid coordinates/timezone/UTC offset
+        assert row["returned_latitude"] == PAYLOAD["latitude"]
+        assert row["returned_longitude"] == PAYLOAD["longitude"]
+        assert row["returned_timezone"] == "Europe/Dublin"
+        assert row["utc_offset_seconds"] == 3600
+        assert row["source_endpoint"] == "archive_daily"
         assert row["source_system"] == SOURCE_SYSTEM
         assert row["ingestion_timestamp"]
 
 
-def test_build_bronze_records_keeps_hourly_and_daily_variables_distinct():
+def test_build_bronze_records_keeps_source_unit_per_variable():
+    records = build_bronze_records(PAYLOAD, IRELAND)
+    units = {row["source_variable"]: row["source_unit"] for row in records}
+    assert units == {
+        "temperature_2m_mean": "°C",
+        "wind_speed_10m_mean": "km/h",
+        "shortwave_radiation_sum": "MJ/m²",
+    }
+
+
+def test_build_bronze_records_keeps_all_three_daily_variables_distinct():
     records = build_bronze_records(PAYLOAD, IRELAND)
     variables = {row["source_variable"] for row in records}
-    assert variables == {"temperature_2m", "wind_speed_10m", "shortwave_radiation_sum"}
+    assert variables == {"temperature_2m_mean", "wind_speed_10m_mean", "shortwave_radiation_sum"}
 
 
 def test_business_key_is_stable_across_reruns_with_different_ingestion_times():
@@ -68,7 +92,7 @@ def test_business_key_is_stable_across_reruns_with_different_ingestion_times():
     assert first_keys == second_keys
 
 
-def test_business_key_is_unique_per_variable_and_timestamp():
+def test_business_key_is_unique_per_variable_and_date():
     records = build_bronze_records(PAYLOAD, IRELAND)
     keys = [business_key(r) for r in records]
     assert len(keys) == len(set(keys))
@@ -76,14 +100,11 @@ def test_business_key_is_unique_per_variable_and_timestamp():
 
 def test_build_bronze_records_raises_on_mismatched_series_length():
     broken_payload = {
-        "hourly": {
-            "time": ["2024-01-01T00:00", "2024-01-01T01:00"],
-            "temperature_2m": [4.1],  # missing one value vs. 'time'
-            "wind_speed_10m": [12.0, 11.5],
-        },
         "daily": {
-            "time": ["2024-01-01"],
-            "shortwave_radiation_sum": [3.2],
+            "time": ["2024-01-01", "2024-01-02"],
+            "temperature_2m_mean": [4.1],  # missing one value vs. 'time'
+            "wind_speed_10m_mean": [12.0, 11.5],
+            "shortwave_radiation_sum": [3.2, 3.0],
         },
     }
 

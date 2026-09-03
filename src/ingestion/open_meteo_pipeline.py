@@ -100,7 +100,7 @@ def _default_spark_writer(spark, records: List[dict], table_name: str) -> int:
                 df.alias("s"),
                 "t.country_code = s.country_code AND "
                 "t.source_variable = s.source_variable AND "
-                "t.observation_timestamp = s.observation_timestamp",
+                "t.observation_date = s.observation_date",
             )
             .whenMatchedUpdateAll()
             .whenNotMatchedInsertAll()

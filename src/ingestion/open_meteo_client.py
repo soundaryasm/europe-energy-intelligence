@@ -18,13 +18,14 @@ import requests
 logger = logging.getLogger(__name__)
 
 OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
+SOURCE_ENDPOINT = "archive_daily"
 
-# Open-Meteo does not currently expose daily mean temperature/wind speed as
-# documented daily variables, so hourly values are retrieved and averaged
-# downstream in Silver (Spec 003). Solar radiation is available directly as
-# a daily variable.
-HOURLY_VARIABLES = ("temperature_2m", "wind_speed_10m")
-DAILY_VARIABLES = ("shortwave_radiation_sum",)
+# Spec 001: "Use Open-Meteo daily variables where available rather than
+# retrieving hourly observations solely to calculate daily averages...
+# The MVP does not require hourly weather ingestion." The Historical
+# Weather API exposes all three approved metrics directly as daily
+# variables, so no hourly section is requested at all.
+DAILY_VARIABLES = ("temperature_2m_mean", "wind_speed_10m_mean", "shortwave_radiation_sum")
 
 DEFAULT_TIMEOUT_SECONDS = 30
 DEFAULT_MAX_RETRIES = 3
@@ -55,7 +56,6 @@ def _build_params(request: OpenMeteoRequest) -> dict:
         "longitude": request.longitude,
         "start_date": request.start_date.isoformat(),
         "end_date": request.end_date.isoformat(),
-        "hourly": ",".join(HOURLY_VARIABLES),
         "daily": ",".join(DAILY_VARIABLES),
         "timezone": request.timezone,
     }
@@ -73,18 +73,17 @@ def _validate_response_payload(payload: Any, request: OpenMeteoRequest) -> None:
             f"Open-Meteo API reported an error for {request.country_code}: {reason}"
         )
 
-    for section, required_vars in (("hourly", HOURLY_VARIABLES), ("daily", DAILY_VARIABLES)):
-        section_payload = payload.get(section)
-        if not isinstance(section_payload, Mapping) or "time" not in section_payload:
+    daily_payload = payload.get("daily")
+    if not isinstance(daily_payload, Mapping) or "time" not in daily_payload:
+        raise OpenMeteoAPIError(
+            f"Open-Meteo response for {request.country_code} is missing 'daily.time'."
+        )
+    for variable in DAILY_VARIABLES:
+        if variable not in daily_payload:
             raise OpenMeteoAPIError(
-                f"Open-Meteo response for {request.country_code} is missing '{section}.time'."
+                f"Open-Meteo response for {request.country_code} is missing "
+                f"'daily.{variable}'."
             )
-        for variable in required_vars:
-            if variable not in section_payload:
-                raise OpenMeteoAPIError(
-                    f"Open-Meteo response for {request.country_code} is missing "
-                    f"'{section}.{variable}'."
-                )
 
 
 def fetch_weather(

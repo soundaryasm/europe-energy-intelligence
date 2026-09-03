@@ -28,14 +28,21 @@ SAMPLE_REQUEST = OpenMeteoRequest(
 
 def _valid_payload():
     return {
-        "hourly": {
-            "time": ["2024-01-01T00:00", "2024-01-01T01:00"],
-            "temperature_2m": [4.1, 4.0],
-            "wind_speed_10m": [12.0, 11.5],
+        "latitude": 53.391914,
+        "longitude": -6.171417,
+        "timezone": "Europe/Dublin",
+        "utc_offset_seconds": 3600,
+        "daily_units": {
+            "time": "iso8601",
+            "temperature_2m_mean": "°C",
+            "wind_speed_10m_mean": "km/h",
+            "shortwave_radiation_sum": "MJ/m²",
         },
         "daily": {
-            "time": ["2024-01-01"],
-            "shortwave_radiation_sum": [3.2],
+            "time": ["2024-01-01", "2024-01-02"],
+            "temperature_2m_mean": [4.1, 4.0],
+            "wind_speed_10m_mean": [12.0, 11.5],
+            "shortwave_radiation_sum": [3.2, 3.0],
         },
     }
 
@@ -48,11 +55,11 @@ def _mock_response(status_code=200, json_body=None, text=""):
     return response
 
 
-def test_build_params_includes_required_variables_and_range():
+def test_build_params_includes_required_daily_variables_and_range():
     params = _build_params(SAMPLE_REQUEST)
 
-    assert params["hourly"] == "temperature_2m,wind_speed_10m"
-    assert params["daily"] == "shortwave_radiation_sum"
+    assert params["daily"] == "temperature_2m_mean,wind_speed_10m_mean,shortwave_radiation_sum"
+    assert "hourly" not in params  # Spec 001: no hourly ingestion for the MVP
     assert params["start_date"] == "2024-01-01"
     assert params["end_date"] == "2024-01-02"
     assert params["timezone"] == "Europe/Dublin"
@@ -110,7 +117,7 @@ def test_fetch_weather_recovers_after_one_transient_failure():
 
     result = fetch_weather(SAMPLE_REQUEST, session=session, max_retries=2, sleep_fn=lambda _: None)
 
-    assert result["hourly"]["time"] == _valid_payload()["hourly"]["time"]
+    assert result["daily"]["time"] == _valid_payload()["daily"]["time"]
     assert session.get.call_count == 2
 
 
@@ -137,7 +144,7 @@ def test_fetch_weather_raises_on_api_error_document():
 def test_fetch_weather_raises_on_missing_expected_variable():
     session = MagicMock()
     payload = _valid_payload()
-    del payload["hourly"]["wind_speed_10m"]
+    del payload["daily"]["wind_speed_10m_mean"]
     session.get.return_value = _mock_response(200, payload)
 
     with pytest.raises(OpenMeteoAPIError):

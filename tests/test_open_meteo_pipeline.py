@@ -23,13 +23,20 @@ GERMANY = CountryConfig("DE", "Germany", "Berlin", 52.5200, 13.4050, "Europe/Ber
 
 def _payload_for(country_code):
     return {
-        "hourly": {
-            "time": ["2024-01-01T00:00"],
-            "temperature_2m": [5.0],
-            "wind_speed_10m": [10.0],
+        "latitude": 53.39,
+        "longitude": -6.17,
+        "timezone": "Europe/Dublin",
+        "utc_offset_seconds": 3600,
+        "daily_units": {
+            "time": "iso8601",
+            "temperature_2m_mean": "°C",
+            "wind_speed_10m_mean": "km/h",
+            "shortwave_radiation_sum": "MJ/m²",
         },
         "daily": {
             "time": ["2024-01-01"],
+            "temperature_2m_mean": [5.0],
+            "wind_speed_10m_mean": [10.0],
             "shortwave_radiation_sum": [2.0],
         },
     }
@@ -136,8 +143,12 @@ def test_run_ingestion_does_not_write_when_every_country_fails():
 
 def test_run_ingestion_treats_empty_response_as_a_failure_not_a_silent_success():
     empty_payload = {
-        "hourly": {"time": [], "temperature_2m": [], "wind_speed_10m": []},
-        "daily": {"time": [], "shortwave_radiation_sum": []},
+        "daily": {
+            "time": [],
+            "temperature_2m_mean": [],
+            "wind_speed_10m_mean": [],
+            "shortwave_radiation_sum": [],
+        },
     }
     fetch_fn = MagicMock(return_value=empty_payload)
     spark_writer = MagicMock()
