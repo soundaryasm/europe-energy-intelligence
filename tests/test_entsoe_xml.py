@@ -16,6 +16,7 @@ from src.ingestion.entsoe_xml import (
 )
 from tests.fixtures_entsoe_xml import (
     ACKNOWLEDGEMENT_ERROR_XML,
+    GENERATION_WITH_PUMPED_STORAGE_CONSUMPTION_XML,
     GENERATION_XML,
     LOAD_XML,
     PRICE_XML,
@@ -59,6 +60,25 @@ def test_parse_time_series_generation_extracts_production_type_per_series():
     production_types = {r["production_type_raw"] for r in records}
     assert production_types == {"B19", "B16"}
     assert all(r["unit"] == "MAW" for r in records)
+
+
+def test_parse_time_series_extracts_business_type():
+    records = parse_time_series(LOAD_XML, LOAD)
+    assert all(r["business_type"] == "A04" for r in records)
+
+
+def test_parse_time_series_keeps_production_and_consumption_series_distinct():
+    # Same psrType (B10, pumped-storage hydro), same timestamp — only
+    # business_type tells the two series apart.
+    records = parse_time_series(GENERATION_WITH_PUMPED_STORAGE_CONSUMPTION_XML, GENERATION)
+
+    assert len(records) == 2
+    by_business_type = {r["business_type"]: r for r in records}
+    assert set(by_business_type) == {"A01", "A04"}
+    assert by_business_type["A01"]["value"] == 80.0
+    assert by_business_type["A04"]["value"] == 30.0
+    assert all(r["production_type_raw"] == "B10" for r in records)
+    assert by_business_type["A01"]["source_timestamp"] == by_business_type["A04"]["source_timestamp"]
 
 
 def test_parse_time_series_price_extracts_currency_and_negative_prices():

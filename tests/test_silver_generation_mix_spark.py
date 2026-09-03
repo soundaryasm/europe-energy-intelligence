@@ -15,7 +15,7 @@ from src.ingestion.entsoe_bronze import build_bronze_records
 from src.ingestion.entsoe_datasets import GENERATION
 from src.ingestion.entsoe_xml import parse_time_series
 from src.transformations.silver_generation_mix import build_silver_generation_mix_daily
-from tests.fixtures_entsoe_xml import GENERATION_XML
+from tests.fixtures_entsoe_xml import GENERATION_WITH_PUMPED_STORAGE_CONSUMPTION_XML, GENERATION_XML
 
 pytestmark = pytest.mark.databricks
 
@@ -82,6 +82,22 @@ def test_build_silver_generation_mix_daily_marks_short_timeline_as_partial(spark
     assert result["wind"]["covered_duration_hours"] == pytest.approx(1.0)
     assert result["wind"]["completeness_status"] == "partial"
     assert result["solar"]["completeness_status"] == "partial"
+
+
+def test_build_silver_generation_mix_daily_excludes_consumption_from_pumped_storage(spark_session):
+    # Real ENTSO-E case: the same psrType (B10, pumped-storage hydro) can
+    # carry both a Production (A01, 80 MW) and a Consumption (A04, 30 MW)
+    # series for the same timestamp. Only the Production figure belongs
+    # in generation_mwh (Spec 003 "Actual Generation by Production Type").
+    rows = _generation_bronze_rows(GENERATION_WITH_PUMPED_STORAGE_CONSUMPTION_XML)
+    bronze_df = spark_session.createDataFrame(rows)
+
+    result = build_silver_generation_mix_daily(bronze_df, IE_TZ).collect()
+
+    assert len(result) == 1  # the consumption row did not survive as a separate/competing row
+    row = result[0].asDict()
+    assert row["normalized_production_type"] == "hydro"
+    assert row["generation_mwh"] == pytest.approx(80.0)  # not 80 - 30, and not 110
 
 
 def test_build_silver_generation_mix_daily_marks_full_timeline_as_complete(spark_session):

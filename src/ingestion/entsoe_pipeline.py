@@ -99,13 +99,35 @@ def _default_spark_writer(spark, records: List[dict], table_name: str) -> int:
 
     Only ever runs on Databricks: PySpark/Delta are imported here, inside
     the function body, rather than at module import time.
+
+    The source DataFrame is deduplicated on the merge key (keeping the
+    row with the latest `ingestion_timestamp`) before the MERGE, exactly
+    like the Open-Meteo writer — see that function's docstring for why:
+    Delta's MERGE fails hard (DELTA_MULTIPLE_SOURCE_ROW_MATCHING_TARGET_ROW_IN_MERGE)
+    if the source has two rows matching the same target row. The merge
+    key includes `business_type` because ENTSO-E's generation-per-type
+    (A75) document can legitimately carry both a Production and a
+    Consumption TimeSeries for the same psrType/timestamp (pumped-storage
+    hydro) — without it those two distinct observations collide.
+    Schema auto-merge is enabled so adding `business_type` here does not
+    break MERGE against a table written before this field existed.
     """
     from delta.tables import DeltaTable
+
+    from src.transformations.dedupe import dedupe_latest
 
     if not records:
         return 0
 
-    df = spark.createDataFrame(records)
+    spark.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
+
+    df = dedupe_latest(
+        spark.createDataFrame(records),
+        key_cols=[
+            "country_code", "dataset_type", "source_timestamp",
+            "production_type_raw", "business_type",
+        ],
+    )
 
     if spark.catalog.tableExists(table_name):
         target = DeltaTable.forName(spark, table_name)
@@ -116,7 +138,8 @@ def _default_spark_writer(spark, records: List[dict], table_name: str) -> int:
                 "t.country_code = s.country_code AND "
                 "t.dataset_type = s.dataset_type AND "
                 "t.source_timestamp = s.source_timestamp AND "
-                "coalesce(t.production_type_raw, '') = coalesce(s.production_type_raw, '')",
+                "coalesce(t.production_type_raw, '') = coalesce(s.production_type_raw, '') AND "
+                "coalesce(t.business_type, '') = coalesce(s.business_type, '')",
             )
             .whenMatchedUpdateAll()
             .whenNotMatchedInsertAll()

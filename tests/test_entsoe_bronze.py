@@ -6,7 +6,11 @@ from src.config.entsoe import EntsoeCountryDomain
 from src.ingestion.entsoe_bronze import SOURCE_SYSTEM, build_bronze_records, business_key
 from src.ingestion.entsoe_datasets import GENERATION, LOAD
 from src.ingestion.entsoe_xml import parse_time_series
-from tests.fixtures_entsoe_xml import GENERATION_XML, LOAD_XML
+from tests.fixtures_entsoe_xml import (
+    GENERATION_WITH_PUMPED_STORAGE_CONSUMPTION_XML,
+    GENERATION_XML,
+    LOAD_XML,
+)
 
 IRELAND_DOMAIN = EntsoeCountryDomain(country_code="IE", domain="10Y1001A1001A59C", validated=False)
 
@@ -43,6 +47,26 @@ def test_business_key_distinguishes_production_types_at_same_timestamp():
 
     keys = [business_key(r) for r in rows]
     assert len(keys) == len(set(keys))  # wind (B19) and solar (B16) at same timestamp differ
+
+
+def test_build_bronze_records_retains_business_type():
+    parsed = parse_time_series(LOAD_XML, LOAD)
+    rows = build_bronze_records(parsed, IRELAND_DOMAIN, LOAD, date(2024, 1, 1), date(2024, 1, 1))
+
+    assert all(row["business_type"] == "A04" for row in rows)
+
+
+def test_business_key_distinguishes_production_from_consumption_at_same_timestamp():
+    # Real ENTSO-E case (pumped-storage hydro): same psrType, same
+    # timestamp, different business_type — must not collide into one
+    # business key, or the Delta MERGE would fail with
+    # DELTA_MULTIPLE_SOURCE_ROW_MATCHING_TARGET_ROW_IN_MERGE.
+    parsed = parse_time_series(GENERATION_WITH_PUMPED_STORAGE_CONSUMPTION_XML, GENERATION)
+    rows = build_bronze_records(parsed, IRELAND_DOMAIN, GENERATION, date(2024, 1, 1), date(2024, 1, 1))
+
+    assert len(rows) == 2
+    keys = [business_key(r) for r in rows]
+    assert len(keys) == len(set(keys))
 
 
 def test_business_key_is_stable_across_reruns_with_different_ingestion_times():

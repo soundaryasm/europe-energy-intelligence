@@ -78,7 +78,19 @@ def parse_time_series(xml_text: str, dataset: EntsoeDataset) -> List[dict]:
     """Flatten every <Point> across every <TimeSeries> into observation records.
 
     Each record has: resolution, source_timestamp (UTC datetime), value,
-    unit, currency, production_type_raw, source_document_mrid.
+    unit, currency, production_type_raw, business_type, source_document_mrid.
+
+    `business_type` (ENTSO-E's <businessType> code, e.g. A01 = Production,
+    A04 = Consumption) is captured because ENTSO-E's actual-generation-
+    per-type document (A75) can legitimately contain BOTH a generation
+    and a consumption TimeSeries for the SAME psrType and the SAME
+    timestamps — most commonly for hydro pumped storage, which both
+    generates and consumes power. Without business_type, those two
+    distinct observations are indistinguishable by (country, dataset,
+    timestamp, production type) alone, which both collapses genuinely
+    different values into one and can cause a Delta MERGE
+    "multiple source rows matched" failure. Callers must not drop this
+    field when building a business/merge key for generation data.
     """
     try:
         root = ET.fromstring(xml_text)
@@ -95,6 +107,13 @@ def parse_time_series(xml_text: str, dataset: EntsoeDataset) -> List[dict]:
         psr_type_element = _find_local(time_series, "psrType")
         if psr_type_element is not None and psr_type_element.text:
             production_type_raw = psr_type_element.text.strip()
+
+        business_type_element = _find_local(time_series, "businessType")
+        business_type = (
+            business_type_element.text.strip()
+            if business_type_element is not None and business_type_element.text
+            else None
+        )
 
         unit_element = _find_local(time_series, "quantity_Measure_Unit.name")
         unit = unit_element.text.strip() if unit_element is not None and unit_element.text else None
@@ -135,6 +154,7 @@ def parse_time_series(xml_text: str, dataset: EntsoeDataset) -> List[dict]:
                         "unit": unit,
                         "currency": currency,
                         "production_type_raw": production_type_raw,
+                        "business_type": business_type,
                         "source_document_mrid": document_mrid,
                     }
                 )

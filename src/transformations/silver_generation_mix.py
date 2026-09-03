@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Dict
 
+from src.ingestion.entsoe_bronze import CONSUMPTION_BUSINESS_TYPE
 from src.transformations.dedupe import dedupe_latest
 from src.transformations.entsoe_silver_common import (
     interval_hours_udf,
@@ -72,12 +73,23 @@ def build_silver_generation_mix_daily(bronze_df: "DataFrame", country_timezones:
     003 "Generation Completeness": "Completeness must be evaluated using
     timeline coverage for each relevant production-type series"), using
     the same expected-local-day-duration rule as demand/price.
+
+    Consumption (business_type A04) observations are excluded: ENTSO-E's
+    generation-per-type document can carry a Consumption TimeSeries
+    alongside Production (A01) for the same psrType/timestamp — real for
+    pumped-storage hydro — and Spec 003's "Actual Generation by
+    Production Type" is about generation, not consumption. Bronze rows
+    written before `business_type` was captured have it as NULL; that is
+    treated as "assume generation" rather than dropping historical data.
     """
     from pyspark.sql import functions as F
 
-    generation_only = bronze_df.filter(F.col("dataset_type") == "generation")
+    generation_only = bronze_df.filter(F.col("dataset_type") == "generation").filter(
+        (F.col("business_type") != CONSUMPTION_BUSINESS_TYPE) | F.col("business_type").isNull()
+    )
     deduped = dedupe_latest(
-        generation_only, key_cols=["country_code", "source_timestamp", "production_type_raw"]
+        generation_only,
+        key_cols=["country_code", "source_timestamp", "production_type_raw", "business_type"],
     )
     valid = deduped.filter(F.col("value") >= 0)
 

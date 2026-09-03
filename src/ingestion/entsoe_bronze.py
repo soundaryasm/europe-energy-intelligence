@@ -10,6 +10,14 @@ from __future__ import annotations
 from datetime import date, datetime, timezone as dt_timezone
 from typing import List, Optional, Tuple
 
+# ENTSO-E's <businessType> code for consumption. Real for pumped-storage
+# hydro reported inside the generation-per-type (A75) document: the same
+# psrType (e.g. B10/B11/B12) can carry BOTH a Production (A01) and a
+# Consumption (A04) TimeSeries for the same timestamps. Silver excludes
+# this from generation totals (Spec 003 "Actual Generation by Production
+# Type" is about generation, not consumption).
+CONSUMPTION_BUSINESS_TYPE = "A04"
+
 from src.config.entsoe import EntsoeCountryDomain
 from src.ingestion.entsoe_datasets import EntsoeDataset
 
@@ -48,6 +56,7 @@ def build_bronze_records(
                 "value": point["value"],
                 "unit": point.get("unit"),
                 "production_type_raw": point.get("production_type_raw"),
+                "business_type": point.get("business_type"),
                 "currency": point.get("currency"),
                 "source_document_mrid": point.get("source_document_mrid"),
                 "requested_start_date": requested_start_date.isoformat(),
@@ -60,16 +69,21 @@ def build_bronze_records(
     return rows
 
 
-def business_key(row: dict) -> Tuple[str, str, str, Optional[str]]:
+def business_key(row: dict) -> Tuple[str, str, str, Optional[str], Optional[str]]:
     """Deterministic identity for one logical Bronze observation.
 
     Production type is part of the key so generation records for the same
     country/timestamp but different production types don't collide
-    (Spec 007's documented ENTSO-E Generation business key).
+    (Spec 007's documented ENTSO-E Generation business key). Business
+    type is also part of the key so a Production (A01) and a Consumption
+    (A04) observation for the same psrType/timestamp — real for
+    pumped-storage hydro in the A75 document — remain two distinct
+    records instead of colliding into one.
     """
     return (
         row["country_code"],
         row["dataset_type"],
         row["source_timestamp"],
         row.get("production_type_raw"),
+        row.get("business_type"),
     )

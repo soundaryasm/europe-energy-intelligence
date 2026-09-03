@@ -12,6 +12,7 @@ LOAD_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <GL_MarketDocument xmlns="urn:iec62325.351:tc57wg16:451-6:generationloaddocument:3:0">
   <mRID>doc-load-123</mRID>
   <TimeSeries>
+    <businessType>A04</businessType>
     <quantity_Measure_Unit.name>MAW</quantity_Measure_Unit.name>
     <Period>
       <timeInterval>
@@ -30,6 +31,7 @@ GENERATION_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <GL_MarketDocument xmlns="urn:iec62325.351:tc57wg16:451-6:generationloaddocument:3:0">
   <mRID>doc-gen-456</mRID>
   <TimeSeries>
+    <businessType>A01</businessType>
     <MktPSRType>
       <psrType>B19</psrType>
     </MktPSRType>
@@ -41,6 +43,7 @@ GENERATION_XML = """<?xml version="1.0" encoding="UTF-8"?>
     </Period>
   </TimeSeries>
   <TimeSeries>
+    <businessType>A01</businessType>
     <MktPSRType>
       <psrType>B16</psrType>
     </MktPSRType>
@@ -49,6 +52,42 @@ GENERATION_XML = """<?xml version="1.0" encoding="UTF-8"?>
       <timeInterval><start>2024-01-01T00:00Z</start></timeInterval>
       <resolution>PT60M</resolution>
       <Point><position>1</position><quantity>50.0</quantity></Point>
+    </Period>
+  </TimeSeries>
+</GL_MarketDocument>
+"""
+
+# Real-world case that triggers DELTA_MULTIPLE_SOURCE_ROW_MATCHING_TARGET_ROW_IN_MERGE
+# if business_type is dropped from the business key: ENTSO-E's actual
+# generation-per-type (A75) document can carry BOTH a Production (A01)
+# and a Consumption (A04) TimeSeries for the same psrType and the same
+# timestamps — real for pumped-storage hydro (B10/B11/B12), which both
+# generates and consumes power.
+GENERATION_WITH_PUMPED_STORAGE_CONSUMPTION_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<GL_MarketDocument xmlns="urn:iec62325.351:tc57wg16:451-6:generationloaddocument:3:0">
+  <mRID>doc-gen-pumped-1</mRID>
+  <TimeSeries>
+    <businessType>A01</businessType>
+    <MktPSRType>
+      <psrType>B10</psrType>
+    </MktPSRType>
+    <quantity_Measure_Unit.name>MAW</quantity_Measure_Unit.name>
+    <Period>
+      <timeInterval><start>2024-01-01T00:00Z</start></timeInterval>
+      <resolution>PT60M</resolution>
+      <Point><position>1</position><quantity>80.0</quantity></Point>
+    </Period>
+  </TimeSeries>
+  <TimeSeries>
+    <businessType>A04</businessType>
+    <MktPSRType>
+      <psrType>B10</psrType>
+    </MktPSRType>
+    <quantity_Measure_Unit.name>MAW</quantity_Measure_Unit.name>
+    <Period>
+      <timeInterval><start>2024-01-01T00:00Z</start></timeInterval>
+      <resolution>PT60M</resolution>
+      <Point><position>1</position><quantity>30.0</quantity></Point>
     </Period>
   </TimeSeries>
 </GL_MarketDocument>

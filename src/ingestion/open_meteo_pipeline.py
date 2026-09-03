@@ -84,13 +84,32 @@ def _default_spark_writer(spark, records: List[dict], table_name: str) -> int:
 
     Only ever runs on Databricks: PySpark/Delta are imported here, inside
     the function body, rather than at module import time.
+
+    The source DataFrame is deduplicated on the merge key (keeping the
+    row with the latest `ingestion_timestamp`) before the MERGE. Delta's
+    MERGE fails with DELTA_MULTIPLE_SOURCE_ROW_MATCHING_TARGET_ROW_IN_MERGE
+    if two source rows match the same target row — this can happen if a
+    retry or overlapping reprocess run hands the writer the same logical
+    observation twice in one call. Deduplicating here (the same
+    keep-latest-by-ingestion_timestamp rule used everywhere else in this
+    codebase — see `src/transformations/dedupe.py`) makes the write
+    robust to that regardless of cause, per Delta's own guidance to
+    "preprocess the source table to eliminate the possibility of
+    multiple matches."
     """
     from delta.tables import DeltaTable
+
+    from src.transformations.dedupe import dedupe_latest
 
     if not records:
         return 0
 
-    df = spark.createDataFrame(records)
+    spark.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
+
+    df = dedupe_latest(
+        spark.createDataFrame(records),
+        key_cols=["country_code", "source_variable", "observation_date"],
+    )
 
     if spark.catalog.tableExists(table_name):
         target = DeltaTable.forName(spark, table_name)
