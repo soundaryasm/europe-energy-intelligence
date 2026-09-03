@@ -27,24 +27,29 @@ resources:
         timezone_id: "Europe/Dublin"
         pause_status: UNPAUSED
 
-      # A scheduled run always uses mode=daily (Spec 006: "The scheduled
-      # daily workflow must not accidentally trigger a full 24-month
-      # backfill."). Backfill/reprocess runs are triggered manually with
-      # these parameters overridden.
+      # A scheduled run always uses execution_mode=daily (Spec 006: "The
+      # scheduled daily workflow must not accidentally trigger a full
+      # 24-month backfill."). Backfill/reprocess runs are triggered
+      # manually with these parameters overridden. This is the single
+      # canonical processing-window definition (Spec 006 "Canonical
+      # Processing Window") passed to every task that needs it, rather
+      # than each task calculating its own date range.
       parameters:
-        - name: mode
+        - name: execution_mode
           default: "daily"
         - name: start_date
           default: ""
         - name: end_date
           default: ""
+        - name: lookback_days
+          default: "3"
 
       tasks:
         - task_key: ingest_open_meteo
           notebook_task:
             notebook_path: "${workspace.file_path}/notebooks/ingestion/open_meteo_ingestion"
             base_parameters:
-              mode: "{{job.parameters.mode}}"
+              execution_mode: "{{job.parameters.execution_mode}}"
               start_date: "{{job.parameters.start_date}}"
               end_date: "{{job.parameters.end_date}}"
           timeout_seconds: 3600
@@ -56,9 +61,10 @@ resources:
           notebook_task:
             notebook_path: "${workspace.file_path}/notebooks/ingestion/entsoe_ingestion"
             base_parameters:
-              mode: "{{job.parameters.mode}}"
+              execution_mode: "{{job.parameters.execution_mode}}"
               start_date: "{{job.parameters.start_date}}"
               end_date: "{{job.parameters.end_date}}"
+              lookback_days: "{{job.parameters.lookback_days}}"
               secret_scope: "${var.entsoe_secret_scope}"
           timeout_seconds: 3600
           max_retries: 2

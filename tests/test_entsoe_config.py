@@ -11,11 +11,14 @@ def test_load_entsoe_domains_covers_all_mvp_countries():
     assert set(domains.keys()) == EXPECTED_CODES
 
 
-def test_load_entsoe_domains_are_currently_flagged_unvalidated():
+def test_load_entsoe_domains_nl_is_validated_others_are_not():
     # Documents the open Spec 002 blocker: codes are sourced from public
-    # docs, not yet confirmed against a live ENTSO-E account.
+    # docs, not yet confirmed against a live ENTSO-E account — except NL,
+    # confirmed against a real tested request/response (see
+    # tmp/entsoe.md, local-only reference notes).
     domains = load_entsoe_domains()
-    assert all(entry.validated is False for entry in domains.values())
+    assert domains["NL"].validated is True
+    assert all(entry.validated is False for code, entry in domains.items() if code != "NL")
 
 
 def test_load_entsoe_domains_rejects_duplicate_country(tmp_path):

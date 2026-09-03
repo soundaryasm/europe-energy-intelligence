@@ -16,18 +16,24 @@ sources:
         description: >
           Daily electricity demand (MWh) per country, produced by
           src/transformations/silver_energy_demand.py (Spec 003).
+          `completeness_status` ('complete'/'partial') must be filtered to
+          'complete' before a row's daily_demand_mwh feeds a trusted Gold
+          metric (Spec 004 "Trusted Silver Inputs").
         columns:
           - name: country_code
           - name: local_date
           - name: daily_demand_mwh
           - name: source_interval_count
+          - name: covered_duration_hours
+          - name: completeness_status
           - name: source_system
 
       - name: silver_energy_price_daily
         description: >
           Daily day-ahead electricity price statistics (EUR/MWh) per
           country, produced by src/transformations/silver_energy_price.py
-          (Spec 003).
+          (Spec 003). `completeness_status` must be 'complete' before a row
+          feeds a trusted Gold metric.
         columns:
           - name: country_code
           - name: local_date
@@ -35,13 +41,17 @@ sources:
           - name: min_day_ahead_price_eur_mwh
           - name: max_day_ahead_price_eur_mwh
           - name: source_interval_count
+          - name: covered_duration_hours
+          - name: completeness_status
           - name: source_system
 
       - name: silver_generation_mix_daily
         description: >
           Daily generation (MWh) per country/normalized production type,
           produced by src/transformations/silver_generation_mix.py
-          (Spec 003).
+          (Spec 003). `completeness_status` is evaluated per production-type
+          series and must be 'complete' before a row feeds a trusted Gold
+          metric.
         columns:
           - name: country_code
           - name: local_date
@@ -49,6 +59,8 @@ sources:
           - name: renewable_flag
           - name: generation_mwh
           - name: production_type_raw_codes
+          - name: covered_duration_hours
+          - name: completeness_status
           - name: source_system
 
       - name: silver_weather_daily

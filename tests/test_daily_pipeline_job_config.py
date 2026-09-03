@@ -45,9 +45,15 @@ def test_job_schedule_is_02_00_europe_dublin():
 def test_job_supports_daily_backfill_reprocess_parameters():
     job = _load_job()
     param_names = {p["name"] for p in job["parameters"]}
-    assert {"mode", "start_date", "end_date"} <= param_names
-    mode_param = next(p for p in job["parameters"] if p["name"] == "mode")
+    assert {"execution_mode", "start_date", "end_date", "lookback_days"} <= param_names
+    mode_param = next(p for p in job["parameters"] if p["name"] == "execution_mode")
     assert mode_param["default"] == "daily"  # scheduled runs never default to backfill
+
+
+def test_entsoe_task_receives_the_canonical_lookback_days_parameter():
+    tasks = _tasks_by_key(_load_job())
+    base_params = tasks["ingest_entsoe"]["notebook_task"]["base_parameters"]
+    assert base_params["lookback_days"] == "{{job.parameters.lookback_days}}"
 
 
 def test_ingestion_tasks_have_no_dependencies():

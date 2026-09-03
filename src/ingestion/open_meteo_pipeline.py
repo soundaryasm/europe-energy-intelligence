@@ -23,6 +23,7 @@ from src.ingestion.open_meteo_client import (
     OpenMeteoRequest,
     fetch_weather,
 )
+from src.orchestration.processing_window import latest_completed_date
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +54,12 @@ class IngestionResult:
 def daily_processing_date(reference_date: Optional[date] = None) -> date:
     """Return the most recently completed calendar date to ingest.
 
-    A single defined strategy (yesterday, relative to `reference_date`)
-    keeps `current_date - 1` logic out of individual notebooks.
+    Delegates to the canonical `processing_window.latest_completed_date`
+    (Spec 006 "Canonical Processing Window") so this single "yesterday"
+    rule has one implementation, reused by both the backfill default
+    below and the daily/backfill/reprocess notebook entry points.
     """
-    today = reference_date or datetime.now(dt_timezone.utc).date()
-    return today - timedelta(days=1)
+    return latest_completed_date(reference_date)
 
 
 def backfill_date_range(

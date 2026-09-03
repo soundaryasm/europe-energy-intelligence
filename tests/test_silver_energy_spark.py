@@ -38,6 +38,37 @@ def _price_bronze_rows():
     return build_bronze_records(parsed, IE_DOMAIN, PRICE, date(2024, 1, 1), date(2024, 1, 1))
 
 
+def _full_day_load_rows(value_mw: float = 3000.0):
+    """24 hourly PT60M load rows covering all of 2024-01-01 UTC.
+
+    2024-01-01 is not a Europe/Dublin DST transition day, so the expected
+    local-day duration is exactly 24 hours here — this is a genuinely
+    `complete` timeline, built directly as bronze-shaped rows rather than
+    via a 24-point XML fixture.
+    """
+    rows = []
+    for hour in range(24):
+        rows.append(
+            {
+                "country_code": "IE",
+                "domain": IE_DOMAIN.domain,
+                "dataset_type": "load",
+                "source_timestamp": f"2024-01-01T{hour:02d}:00:00",
+                "source_resolution": "PT60M",
+                "value": value_mw,
+                "unit": "MAW",
+                "production_type_raw": None,
+                "currency": None,
+                "source_document_mrid": "doc-load-full",
+                "requested_start_date": "2024-01-01",
+                "requested_end_date": "2024-01-01",
+                "source_system": "entsoe",
+                "ingestion_timestamp": datetime(2024, 1, 2, tzinfo=timezone.utc).isoformat(),
+            }
+        )
+    return rows
+
+
 def test_build_silver_energy_demand_daily_converts_power_to_energy(spark_session):
     # LOAD_XML: 3500.5 MW and 3400.2 MW, each over a 60-minute interval.
     bronze_df = spark_session.createDataFrame(_load_bronze_rows())
@@ -77,6 +108,28 @@ def test_build_silver_energy_demand_daily_dedupes_reruns_to_latest_ingestion(spa
     assert result[0].daily_demand_mwh == pytest.approx(3500.5 + 3400.2)
 
 
+def test_build_silver_energy_demand_daily_marks_short_timeline_as_partial(spark_session):
+    # LOAD_XML only covers 2 of the ~24 expected hours for 2024-01-01 in
+    # Europe/Dublin — a real partial day (Spec 003 "Demand Completeness"),
+    # not proof of a complete one.
+    bronze_df = spark_session.createDataFrame(_load_bronze_rows())
+
+    row = build_silver_energy_demand_daily(bronze_df, IE_TZ).collect()[0].asDict()
+
+    assert row["covered_duration_hours"] == pytest.approx(2.0)
+    assert row["completeness_status"] == "partial"
+
+
+def test_build_silver_energy_demand_daily_marks_full_timeline_as_complete(spark_session):
+    bronze_df = spark_session.createDataFrame(_full_day_load_rows())
+
+    row = build_silver_energy_demand_daily(bronze_df, IE_TZ).collect()[0].asDict()
+
+    assert row["covered_duration_hours"] == pytest.approx(24.0)
+    assert row["completeness_status"] == "complete"
+    assert row["daily_demand_mwh"] == pytest.approx(3000.0 * 24)
+
+
 def test_build_silver_energy_price_daily_computes_weighted_average_and_extremes(spark_session):
     # PRICE_XML: -5.32 and 45.10 EUR/MWh, each over a 60-minute interval.
     bronze_df = spark_session.createDataFrame(_price_bronze_rows())
@@ -96,3 +149,12 @@ def test_build_silver_energy_price_daily_keeps_negative_prices(spark_session):
     result = build_silver_energy_price_daily(bronze_df, IE_TZ).collect()
 
     assert result[0].min_day_ahead_price_eur_mwh < 0
+
+
+def test_build_silver_energy_price_daily_marks_short_timeline_as_partial(spark_session):
+    bronze_df = spark_session.createDataFrame(_price_bronze_rows())
+
+    row = build_silver_energy_price_daily(bronze_df, IE_TZ).collect()[0].asDict()
+
+    assert row["covered_duration_hours"] == pytest.approx(2.0)
+    assert row["completeness_status"] == "partial"

@@ -12,8 +12,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Dict
 
-from src.ingestion.entsoe_xml import parse_iso8601_duration_minutes
 from src.transformations.dedupe import dedupe_latest
+from src.transformations.entsoe_silver_common import (
+    interval_hours_udf,
+    with_completeness_status,
+    with_local_date,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     from pyspark.sql import DataFrame
@@ -25,33 +29,10 @@ SILVER_PRICE_COLUMNS = (
     "min_day_ahead_price_eur_mwh",
     "max_day_ahead_price_eur_mwh",
     "source_interval_count",
+    "covered_duration_hours",
+    "completeness_status",
     "source_system",
 )
-
-
-def _interval_hours_udf():
-    from pyspark.sql import functions as F
-    from pyspark.sql.types import DoubleType
-
-    def _hours(resolution: str) -> float:
-        return parse_iso8601_duration_minutes(resolution) / 60.0
-
-    return F.udf(_hours, DoubleType())
-
-
-def _with_local_date(df: "DataFrame", country_timezones: Dict[str, str]):
-    from pyspark.sql import functions as F
-
-    timezone_map = F.create_map([F.lit(x) for pair in country_timezones.items() for x in pair])
-    return df.withColumn("_tz", timezone_map[F.col("country_code")]).withColumn(
-        "local_date",
-        F.to_date(
-            F.from_utc_timestamp(
-                F.to_timestamp(F.col("source_timestamp"), "yyyy-MM-dd'T'HH:mm:ss"),
-                F.col("_tz"),
-            )
-        ),
-    )
 
 
 def build_silver_energy_price_daily(bronze_df: "DataFrame", country_timezones: Dict[str, str]) -> "DataFrame":
@@ -60,25 +41,31 @@ def build_silver_energy_price_daily(bronze_df: "DataFrame", country_timezones: D
     The daily average is interval-duration-weighted (Spec 003), so mixed
     15/30/60-minute resolutions within one day are not double- or
     under-counted. Negative prices are valid and are never filtered out.
+    `completeness_status` follows the same expected-timeline rule as
+    demand (Spec 003 "Price Completeness") — Gold must not treat a
+    `partial` day's average as a trusted complete daily metric.
     """
     from pyspark.sql import functions as F
 
     price_only = bronze_df.filter(F.col("dataset_type") == "price")
     deduped = dedupe_latest(price_only, key_cols=["country_code", "source_timestamp"])
 
-    enriched = _with_local_date(deduped, country_timezones).withColumn(
-        "interval_hours", _interval_hours_udf()(F.col("source_resolution"))
+    enriched = with_local_date(deduped, country_timezones).withColumn(
+        "interval_hours", interval_hours_udf()(F.col("source_resolution"))
     ).withColumn("weighted_price", F.col("value") * F.col("interval_hours"))
 
-    result = (
+    aggregated = (
         enriched.groupBy("country_code", "local_date")
         .agg(
             (F.sum("weighted_price") / F.sum("interval_hours")).alias("avg_day_ahead_price_eur_mwh"),
             F.min("value").alias("min_day_ahead_price_eur_mwh"),
             F.max("value").alias("max_day_ahead_price_eur_mwh"),
             F.count(F.lit(1)).alias("source_interval_count"),
+            F.sum("interval_hours").alias("covered_duration_hours"),
         )
         .withColumn("source_system", F.lit("entsoe"))
     )
+
+    result = with_completeness_status(aggregated, country_timezones)
 
     return result.select(*SILVER_PRICE_COLUMNS)

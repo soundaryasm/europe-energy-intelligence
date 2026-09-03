@@ -2,9 +2,10 @@
 #
 # SOURCE: publicly documented ENTSO-E Transparency Platform domain codes.
 # STATUS: NOT independently re-verified against a live ENTSO-E account/API
-# in this environment (no API credentials are available here). Every entry
-# is marked `validated: false` until someone with ENTSO-E API access
-# confirms it against a real request/response.
+# in this environment (no API credentials are available here), except NL
+# — see below. Every other entry is marked `validated: false` until
+# someone with ENTSO-E API access confirms it against a real
+# request/response.
 #
 # Spec 002: "Codes must be validated against ENTSO-E before being
 # committed to production configuration." Treat `validated: false` as an
@@ -28,4 +29,7 @@ domains:
 
   - country_code: NL
     domain: "10YNL----------L"
-    validated: false
+    # Confirmed against a real tested documentType=A65 request/response
+    # (see tmp/entsoe.md, local-only reference notes) — this is the only
+    # domain code independently verified in this environment.
+    validated: true

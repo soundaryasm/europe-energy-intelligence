@@ -23,8 +23,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Dict
 
-from src.ingestion.entsoe_xml import parse_iso8601_duration_minutes
 from src.transformations.dedupe import dedupe_latest
+from src.transformations.entsoe_silver_common import (
+    interval_hours_udf,
+    with_completeness_status,
+    with_local_date,
+)
 from src.transformations.production_types import get_production_type_info
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -37,18 +41,10 @@ SILVER_GENERATION_MIX_COLUMNS = (
     "renewable_flag",
     "generation_mwh",
     "production_type_raw_codes",
+    "covered_duration_hours",
+    "completeness_status",
     "source_system",
 )
-
-
-def _interval_hours_udf():
-    from pyspark.sql import functions as F
-    from pyspark.sql.types import DoubleType
-
-    def _hours(resolution: str) -> float:
-        return parse_iso8601_duration_minutes(resolution) / 60.0
-
-    return F.udf(_hours, DoubleType())
 
 
 def _normalize_production_type_udf():
@@ -69,23 +65,14 @@ def _normalize_production_type_udf():
     return F.udf(_normalize, schema)
 
 
-def _with_local_date(df: "DataFrame", country_timezones: Dict[str, str]):
-    from pyspark.sql import functions as F
-
-    timezone_map = F.create_map([F.lit(x) for pair in country_timezones.items() for x in pair])
-    return df.withColumn("_tz", timezone_map[F.col("country_code")]).withColumn(
-        "local_date",
-        F.to_date(
-            F.from_utc_timestamp(
-                F.to_timestamp(F.col("source_timestamp"), "yyyy-MM-dd'T'HH:mm:ss"),
-                F.col("_tz"),
-            )
-        ),
-    )
-
-
 def build_silver_generation_mix_daily(bronze_df: "DataFrame", country_timezones: Dict[str, str]) -> "DataFrame":
-    """Aggregate Bronze ENTSO-E generation observations into `silver_generation_mix_daily`."""
+    """Aggregate Bronze ENTSO-E generation observations into `silver_generation_mix_daily`.
+
+    `completeness_status` is evaluated per production-type series (Spec
+    003 "Generation Completeness": "Completeness must be evaluated using
+    timeline coverage for each relevant production-type series"), using
+    the same expected-local-day-duration rule as demand/price.
+    """
     from pyspark.sql import functions as F
 
     generation_only = bronze_df.filter(F.col("dataset_type") == "generation")
@@ -97,22 +84,25 @@ def build_silver_generation_mix_daily(bronze_df: "DataFrame", country_timezones:
     normalize_udf = _normalize_production_type_udf()
 
     enriched = (
-        _with_local_date(valid, country_timezones)
-        .withColumn("interval_hours", _interval_hours_udf()(F.col("source_resolution")))
+        with_local_date(valid, country_timezones)
+        .withColumn("interval_hours", interval_hours_udf()(F.col("source_resolution")))
         .withColumn("generation_mwh_interval", F.col("value") * F.col("interval_hours"))
         .withColumn("_normalized", normalize_udf(F.col("production_type_raw")))
         .withColumn("normalized_production_type", F.col("_normalized.normalized_category"))
         .withColumn("renewable_flag", F.col("_normalized.renewable"))
     )
 
-    result = (
+    aggregated = (
         enriched.groupBy("country_code", "local_date", "normalized_production_type")
         .agg(
             F.sum("generation_mwh_interval").alias("generation_mwh"),
             F.first("renewable_flag").alias("renewable_flag"),
             F.sort_array(F.collect_set("production_type_raw")).alias("production_type_raw_codes"),
+            F.sum("interval_hours").alias("covered_duration_hours"),
         )
         .withColumn("source_system", F.lit("entsoe"))
     )
+
+    result = with_completeness_status(aggregated, country_timezones)
 
     return result.select(*SILVER_GENERATION_MIX_COLUMNS)

@@ -69,3 +69,34 @@ def test_build_silver_generation_mix_daily_excludes_negative_generation(spark_se
 
     assert "wind" not in result  # the only wind reading was negative and was dropped
     assert "solar" in result
+
+
+def test_build_silver_generation_mix_daily_marks_short_timeline_as_partial(spark_session):
+    # GENERATION_XML covers a single PT60M interval per production type —
+    # 1 of the ~24 expected hours for 2024-01-01 in Europe/Dublin (Spec
+    # 003 "Generation Completeness": evaluated per production-type series).
+    bronze_df = spark_session.createDataFrame(_generation_bronze_rows())
+
+    result = {row.normalized_production_type: row.asDict() for row in build_silver_generation_mix_daily(bronze_df, IE_TZ).collect()}
+
+    assert result["wind"]["covered_duration_hours"] == pytest.approx(1.0)
+    assert result["wind"]["completeness_status"] == "partial"
+    assert result["solar"]["completeness_status"] == "partial"
+
+
+def test_build_silver_generation_mix_daily_marks_full_timeline_as_complete(spark_session):
+    rows = []
+    for hour in range(24):
+        row = dict(_generation_bronze_rows()[0])  # wind (B19) series
+        row["source_timestamp"] = f"2024-01-01T{hour:02d}:00:00"
+        row["value"] = 100.0
+        rows.append(row)
+    bronze_df = spark_session.createDataFrame(rows)
+
+    result = build_silver_generation_mix_daily(bronze_df, IE_TZ).collect()
+
+    assert len(result) == 1
+    row = result[0].asDict()
+    assert row["covered_duration_hours"] == pytest.approx(24.0)
+    assert row["completeness_status"] == "complete"
+    assert row["generation_mwh"] == pytest.approx(100.0 * 24)
