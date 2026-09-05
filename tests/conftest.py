@@ -16,6 +16,18 @@ def spark_session():
     pytest.importorskip("pyspark")
     from pyspark.sql import SparkSession
 
+    # Databricks Serverless runs through Spark Connect, which does not
+    # allow `.master(...)` to be set — and the notebook process already
+    # has an active session running for it. Reuse that session instead of
+    # trying to configure one, and never .stop() a session we didn't
+    # create ourselves.
+    active = SparkSession.getActiveSession()
+    if active is not None:
+        yield active
+        return
+
+    # No active session (plain local/CI run, no Databricks environment):
+    # same local Spark fallback as before.
     spark = (
         SparkSession.builder.master("local[1]")
         .appName("europe-energy-intelligence-tests")
