@@ -1,10 +1,9 @@
 # Databricks Asset Bundle root config (Spec 006).
 #
-# NOT VALIDATED: no Databricks CLI or workspace is available in this
-# environment, so `databricks bundle validate` / `databricks bundle
-# deploy` have not been run against this file. Review and validate
-# before first deployment — see specs/006-daily-orchestration.md and the
-# project status notes for what still needs a real Databricks workspace.
+# `databricks bundle validate` passes against this file (prod target).
+# `databricks bundle deploy` has not been run yet — see
+# specs/006-daily-orchestration.md and the project status notes before
+# first deployment.
 
 bundle:
   name: europe-energy-intelligence
@@ -18,3 +17,9 @@ targets:
     # `workspace.host` intentionally omitted here — supply it via the
     # Databricks CLI profile/auth configuration, never hard-coded.
     mode: production
+    workspace:
+      # Required by `mode: production` so every deployer lands on the
+      # same path regardless of who/what runs `databricks bundle deploy`.
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      sql_warehouse_id: ed826545af6a5502

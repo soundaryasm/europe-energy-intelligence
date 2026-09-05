@@ -109,46 +109,40 @@ def _default_spark_writer(spark, records: List[dict], table_name: str) -> int:
     (A75) document can legitimately carry both a Production and a
     Consumption TimeSeries for the same psrType/timestamp (pumped-storage
     hydro) — without it those two distinct observations collide.
-    Schema auto-merge is enabled so adding `business_type` here does not
-    break MERGE against a table written before this field existed.
-    """
-    from delta.tables import DeltaTable
 
+    Uses an explicit, application-owned schema and validates it against
+    the existing table rather than relying on Delta's automatic MERGE
+    schema evolution (unsupported on Databricks serverless Standard
+    environment v5 — see `delta_schema` module docstring). A schema
+    mismatch (e.g. a table predating the `business_type` column) fails
+    loudly; bring the table up to date with an explicit migration first
+    (`docs/migrations/001_entsoe_bronze_add_business_type.sql`).
+    """
+    from src.ingestion.delta_schema import entsoe_bronze_schema, write_with_deterministic_schema
     from src.transformations.dedupe import dedupe_latest
 
     if not records:
         return 0
 
-    spark.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
-
     df = dedupe_latest(
-        spark.createDataFrame(records),
+        spark.createDataFrame(records, schema=entsoe_bronze_schema()),
         key_cols=[
             "country_code", "dataset_type", "source_timestamp",
             "production_type_raw", "business_type",
         ],
     )
 
-    if spark.catalog.tableExists(table_name):
-        target = DeltaTable.forName(spark, table_name)
-        (
-            target.alias("t")
-            .merge(
-                df.alias("s"),
-                "t.country_code = s.country_code AND "
-                "t.dataset_type = s.dataset_type AND "
-                "t.source_timestamp = s.source_timestamp AND "
-                "coalesce(t.production_type_raw, '') = coalesce(s.production_type_raw, '') AND "
-                "coalesce(t.business_type, '') = coalesce(s.business_type, '')",
-            )
-            .whenMatchedUpdateAll()
-            .whenNotMatchedInsertAll()
-            .execute()
-        )
-    else:
-        df.write.format("delta").mode("overwrite").saveAsTable(table_name)
-
-    return df.count()
+    return write_with_deterministic_schema(
+        spark,
+        df,
+        table_name,
+        entsoe_bronze_schema(),
+        "t.country_code = s.country_code AND "
+        "t.dataset_type = s.dataset_type AND "
+        "t.source_timestamp = s.source_timestamp AND "
+        "coalesce(t.production_type_raw, '') = coalesce(s.production_type_raw, '') AND "
+        "coalesce(t.business_type, '') = coalesce(s.business_type, '')",
+    )
 
 
 def run_ingestion(

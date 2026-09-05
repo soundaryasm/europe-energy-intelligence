@@ -44,8 +44,22 @@ resources:
         - name: lookback_days
           default: "3"
 
+      # Every Python notebook task below runs on this one, explicit,
+      # serverless environment (Standard v5 / Python 3.12 — matches what
+      # the interactive notebook is confirmed to run on) instead of
+      # depending on whatever compute a user last selected in the
+      # notebook's Environment panel. Dependencies are read live from the
+      # deployed requirements.txt so the two can never drift apart.
+      environments:
+        - environment_key: python_notebook_env
+          spec:
+            environment_version: "5"
+            dependencies:
+              - -r ${workspace.file_path}/requirements.txt
+
       tasks:
         - task_key: ingest_open_meteo
+          environment_key: python_notebook_env
           notebook_task:
             notebook_path: "${workspace.file_path}/notebooks/ingestion/open_meteo_ingestion"
             base_parameters:
@@ -58,6 +72,7 @@ resources:
           retry_on_timeout: true
 
         - task_key: ingest_entsoe
+          environment_key: python_notebook_env
           notebook_task:
             notebook_path: "${workspace.file_path}/notebooks/ingestion/entsoe_ingestion"
             base_parameters:
@@ -74,6 +89,7 @@ resources:
         # Silver must not start until BOTH ingestion tasks succeed
         # (implicit ALL_SUCCESS run_if — Spec 006 "Failure Behaviour").
         - task_key: transform_silver
+          environment_key: python_notebook_env
           depends_on:
             - task_key: ingest_open_meteo
             - task_key: ingest_entsoe
@@ -85,6 +101,7 @@ resources:
 
         # dbt must not run until Silver succeeds.
         - task_key: build_dbt_gold
+          environment_key: python_notebook_env
           depends_on:
             - task_key: transform_silver
           dbt_task:
@@ -108,6 +125,7 @@ resources:
         # tests) succeeded — a failed/known-invalid Gold build never
         # reaches the serving layer.
         - task_key: publish_postgres
+          environment_key: python_notebook_env
           depends_on:
             - task_key: build_dbt_gold
           notebook_task:

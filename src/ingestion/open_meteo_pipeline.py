@@ -96,39 +96,32 @@ def _default_spark_writer(spark, records: List[dict], table_name: str) -> int:
     robust to that regardless of cause, per Delta's own guidance to
     "preprocess the source table to eliminate the possibility of
     multiple matches."
-    """
-    from delta.tables import DeltaTable
 
+    Uses an explicit, application-owned schema and validates it against
+    the existing table rather than relying on Delta's automatic MERGE
+    schema evolution (unsupported on Databricks serverless Standard
+    environment v5 — see `delta_schema` module docstring).
+    """
+    from src.ingestion.delta_schema import open_meteo_bronze_schema, write_with_deterministic_schema
     from src.transformations.dedupe import dedupe_latest
 
     if not records:
         return 0
 
-    spark.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
-
     df = dedupe_latest(
-        spark.createDataFrame(records),
+        spark.createDataFrame(records, schema=open_meteo_bronze_schema()),
         key_cols=["country_code", "source_variable", "observation_date"],
     )
 
-    if spark.catalog.tableExists(table_name):
-        target = DeltaTable.forName(spark, table_name)
-        (
-            target.alias("t")
-            .merge(
-                df.alias("s"),
-                "t.country_code = s.country_code AND "
-                "t.source_variable = s.source_variable AND "
-                "t.observation_date = s.observation_date",
-            )
-            .whenMatchedUpdateAll()
-            .whenNotMatchedInsertAll()
-            .execute()
-        )
-    else:
-        df.write.format("delta").mode("overwrite").saveAsTable(table_name)
-
-    return df.count()
+    return write_with_deterministic_schema(
+        spark,
+        df,
+        table_name,
+        open_meteo_bronze_schema(),
+        "t.country_code = s.country_code AND "
+        "t.source_variable = s.source_variable AND "
+        "t.observation_date = s.observation_date",
+    )
 
 
 def run_ingestion(
