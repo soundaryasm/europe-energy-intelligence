@@ -95,8 +95,13 @@ def open_meteo_bronze_schema() -> "StructType":
     """Application-owned schema for `bronze_open_meteo_weather` (Spec 001).
 
     Mirrors exactly what `open_meteo_bronze.build_bronze_records` emits.
+    `utc_offset_seconds` is `LongType`, not `IntegerType`, to match what
+    PySpark's own type inference (`spark.createDataFrame(records)` with no
+    explicit schema, the pre-`delta_schema` writer) already produced for
+    every real table — confirmed via `DESCRIBE TABLE
+    bronze_open_meteo_weather` showing `bigint`, not a value-range need.
     """
-    from pyspark.sql.types import DoubleType, IntegerType, StringType, StructField, StructType
+    from pyspark.sql.types import DoubleType, LongType, StringType, StructField, StructType
 
     return StructType(
         [
@@ -109,7 +114,7 @@ def open_meteo_bronze_schema() -> "StructType":
             StructField("returned_latitude", DoubleType(), True),
             StructField("returned_longitude", DoubleType(), True),
             StructField("returned_timezone", StringType(), True),
-            StructField("utc_offset_seconds", IntegerType(), True),
+            StructField("utc_offset_seconds", LongType(), True),
             StructField("observation_date", StringType(), False),
             StructField("source_variable", StringType(), False),
             StructField("source_value", DoubleType(), True),

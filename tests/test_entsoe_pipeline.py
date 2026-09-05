@@ -5,7 +5,7 @@ mocked. XML parsing and Bronze record construction run for real inside
 `run_ingestion`, fed by fixture XML text returned from the mocked fetch —
 this exercises the real business logic, not a stand-in for it.
 """
-from datetime import date
+from datetime import date, datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -14,7 +14,7 @@ from src.config.countries import CountryConfig
 from src.config.entsoe import EntsoeCountryDomain
 from src.ingestion.entsoe_client import EntsoeAPIError, EntsoeNoDataError
 from src.ingestion.entsoe_datasets import GENERATION, LOAD, PRICE
-from src.ingestion.entsoe_pipeline import resolve_country_domains, run_ingestion
+from src.ingestion.entsoe_pipeline import _filter_points_within_window, resolve_country_domains, run_ingestion
 from src.config.entsoe import EntsoeConfigError
 from tests.fixtures_entsoe_xml import GENERATION_XML, LOAD_XML, PRICE_XML
 
@@ -226,3 +226,50 @@ def test_run_ingestion_rejects_inverted_date_range():
             date(2024, 1, 5), date(2024, 1, 1),
             token="tok", countries=[IRELAND], domains={"IE": IE_DOMAIN},
         )
+
+
+def test_filter_points_within_window_drops_points_outside_the_requested_range():
+    # Real incident this guards against: ENTSO-E's day-ahead price (A44)
+    # documents are published in whole local-calendar-day blocks, so a
+    # request for a single UTC day can come back with points from the
+    # adjacent day too (confirmed against a real response — see this
+    # commit's history). A single-day reprocess must not silently persist
+    # data for days nobody asked for.
+    points = [
+        {"source_timestamp": datetime(2024, 1, 1, 22, 0, tzinfo=timezone.utc)},  # before window
+        {"source_timestamp": datetime(2024, 1, 2, 12, 0, tzinfo=timezone.utc)},  # inside window
+        {"source_timestamp": datetime(2024, 1, 3, 1, 0, tzinfo=timezone.utc)},  # after window
+    ]
+
+    filtered = _filter_points_within_window(points, date(2024, 1, 2), date(2024, 1, 2))
+
+    assert filtered == [points[1]]
+
+
+def test_run_ingestion_trims_dataset_response_to_the_requested_window():
+    # GENERATION_XML's two points (wind + solar) always fall on
+    # 2024-01-01, regardless of what window is requested (the mocked
+    # fetch ignores request dates, like a real ENTSO-E day-ahead price
+    # response returning a fixed local calendar day no matter the exact
+    # UTC window asked for). Requesting a second day (chunked separately,
+    # chunk_days=1) must not let those same 2024-01-01 points through a
+    # second time under the 2024-01-02 window — without the trim, this
+    # would silently double both records.
+    def fetch_fn(request, **_):
+        return XML_BY_DATASET[request.dataset.name]
+
+    spark_writer = MagicMock(return_value=0)
+
+    result = run_ingestion(
+        date(2024, 1, 1), date(2024, 1, 2),
+        token="tok", countries=[IRELAND], domains={"IE": IE_DOMAIN},
+        datasets=(GENERATION,), fetch_fn=fetch_fn, spark_writer=spark_writer,
+        chunk_days=1,
+    )
+
+    assert result.succeeded == ["IE:generation"]
+    written_records = spark_writer.call_args[0][1]
+    # Only the 2024-01-01 window's two points survive; the 2024-01-02
+    # window's (identical, mocked) response gets fully filtered out.
+    assert len(written_records) == 2
+    assert all(r["source_timestamp"] == "2024-01-01T00:00:00" for r in written_records)

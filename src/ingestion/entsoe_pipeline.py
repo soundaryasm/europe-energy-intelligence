@@ -70,6 +70,25 @@ class IngestionResult:
         return not self.failed
 
 
+def _filter_points_within_window(parsed_points: List[dict], window_start: date, window_end: date) -> List[dict]:
+    """Drop any parsed point whose `source_timestamp` falls outside
+    `[window_start, window_end]` (UTC calendar dates).
+
+    ENTSO-E's day-ahead price (A44) documents are published in whole
+    local-calendar-day blocks: a request for a single UTC day can come
+    back with data from an adjacent day too, once local-time day
+    boundaries are accounted for (confirmed against a real response —
+    see docs/migrations/ commit history / this incident). `load` and
+    `generation` have not shown this, but the trim applies uniformly
+    rather than special-casing one dataset, since "only persist what was
+    actually requested" is a general invariant, not a price-specific one.
+    """
+    return [
+        point for point in parsed_points
+        if window_start <= point["source_timestamp"].date() <= window_end
+    ]
+
+
 def resolve_country_domains(
     countries: Sequence[CountryConfig], domains: Dict[str, EntsoeCountryDomain]
 ) -> List[EntsoeCountryDomain]:
@@ -221,6 +240,7 @@ def run_ingestion(
                         continue
 
                     parsed_points = parse_time_series(xml_text, dataset)
+                    parsed_points = _filter_points_within_window(parsed_points, window_start, window_end)
                     dataset_records.extend(
                         build_bronze_records(
                             parsed_points, country_domain, dataset, window_start, window_end
