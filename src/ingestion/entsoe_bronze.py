@@ -20,6 +20,7 @@ CONSUMPTION_BUSINESS_TYPE = "A04"
 
 from src.config.entsoe import EntsoeCountryDomain
 from src.ingestion.entsoe_datasets import EntsoeDataset
+from src.ingestion.entsoe_xml import EntsoeXmlError
 
 SOURCE_SYSTEM = "entsoe"
 
@@ -39,11 +40,28 @@ def build_bronze_records(
     of the same country/dataset/date window, which is what allows a
     downstream Delta MERGE write to stay idempotent even when ENTSO-E
     later revises a previously published value.
+
+    Every ENTSO-E dataset this pipeline ingests (load, generation, price)
+    has been confirmed — against real responses, not just documentation —
+    to always carry a `<businessType>` code (see `tests/fixtures_entsoe_xml.py`
+    and `tmp/entsoe.md`). A missing one is therefore treated as a genuine
+    ingestion defect and rejected here, rather than silently persisted as
+    a `NULL` that later collides with a real value under the same merge
+    key (see `docs/migrations/001_entsoe_bronze_add_business_type.sql` for
+    the incident this guards against).
     """
     ts = ingestion_timestamp or datetime.now(dt_timezone.utc)
     rows: List[dict] = []
 
     for point in parsed_points:
+        business_type = point.get("business_type")
+        if business_type is None:
+            raise EntsoeXmlError(
+                f"ENTSO-E point for {country_domain.country_code}/{dataset.name} at "
+                f"{point['source_timestamp']} has no businessType. Refusing to persist "
+                "a Bronze row with a missing business key component."
+            )
+
         rows.append(
             {
                 "country_code": country_domain.country_code,
@@ -56,7 +74,7 @@ def build_bronze_records(
                 "value": point["value"],
                 "unit": point.get("unit"),
                 "production_type_raw": point.get("production_type_raw"),
-                "business_type": point.get("business_type"),
+                "business_type": business_type,
                 "currency": point.get("currency"),
                 "source_document_mrid": point.get("source_document_mrid"),
                 "requested_start_date": requested_start_date.isoformat(),

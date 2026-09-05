@@ -9,7 +9,10 @@ import pytest
 pytest.importorskip("pyspark")
 
 from src.ingestion.delta_schema import (
+    DuplicateKeyError,
+    ENTSOE_BRONZE_KEY_COLS,
     SchemaMismatchError,
+    assert_unique_keys,
     ensure_schema_compatible,
     entsoe_bronze_schema,
     open_meteo_bronze_schema,
@@ -58,3 +61,38 @@ def test_ensure_schema_compatible_ignores_nullability_only_differences():
     flipped_nullability = StructType([StructField(f.name, f.dataType, False) for f in expected.fields])
 
     ensure_schema_compatible(flipped_nullability, expected, "bronze_open_meteo_weather")  # must not raise
+
+
+def _entsoe_row(**overrides):
+    row = {
+        "country_code": "IE", "domain": "10Y1001A1001A59C", "dataset_type": "load",
+        "source_timestamp": "2024-01-01T00:00:00", "source_resolution": "PT60M", "value": 100.0,
+        "unit": "MAW", "production_type_raw": None, "business_type": "A04", "currency": None,
+        "source_document_mrid": "doc-1", "requested_start_date": "2024-01-01",
+        "requested_end_date": "2024-01-01", "source_system": "entsoe",
+        "ingestion_timestamp": "2024-01-01T00:00:00+00:00",
+    }
+    row.update(overrides)
+    return row
+
+
+def test_assert_unique_keys_accepts_a_deduplicated_dataframe(spark_session):
+    df = spark_session.createDataFrame([_entsoe_row(), _entsoe_row(source_timestamp="2024-01-01T01:00:00")], schema=entsoe_bronze_schema())
+
+    assert_unique_keys(df, ENTSOE_BRONZE_KEY_COLS, "bronze_entsoe_energy")  # must not raise
+
+
+def test_assert_unique_keys_rejects_duplicate_merge_keys(spark_session):
+    # Two rows identical on every ENTSOE_BRONZE_KEY_COLS column — exactly
+    # what would otherwise hit Delta's
+    # DELTA_MULTIPLE_SOURCE_ROW_MATCHING_TARGET_ROW_IN_MERGE at .execute().
+    df = spark_session.createDataFrame(
+        [_entsoe_row(ingestion_timestamp="2024-01-01T00:00:00+00:00"),
+         _entsoe_row(ingestion_timestamp="2024-01-01T00:05:00+00:00")],
+        schema=entsoe_bronze_schema(),
+    )
+
+    with pytest.raises(DuplicateKeyError) as exc_info:
+        assert_unique_keys(df, ENTSOE_BRONZE_KEY_COLS, "bronze_entsoe_energy")
+
+    assert "bronze_entsoe_energy" in str(exc_info.value)

@@ -118,7 +118,11 @@ def _default_spark_writer(spark, records: List[dict], table_name: str) -> int:
     loudly; bring the table up to date with an explicit migration first
     (`docs/migrations/001_entsoe_bronze_add_business_type.sql`).
     """
-    from src.ingestion.delta_schema import entsoe_bronze_schema, write_with_deterministic_schema
+    from src.ingestion.delta_schema import (
+        ENTSOE_BRONZE_KEY_COLS,
+        entsoe_bronze_schema,
+        write_with_deterministic_schema,
+    )
     from src.transformations.dedupe import dedupe_latest
 
     if not records:
@@ -126,22 +130,11 @@ def _default_spark_writer(spark, records: List[dict], table_name: str) -> int:
 
     df = dedupe_latest(
         spark.createDataFrame(records, schema=entsoe_bronze_schema()),
-        key_cols=[
-            "country_code", "dataset_type", "source_timestamp",
-            "production_type_raw", "business_type",
-        ],
+        key_cols=ENTSOE_BRONZE_KEY_COLS,
     )
 
     return write_with_deterministic_schema(
-        spark,
-        df,
-        table_name,
-        entsoe_bronze_schema(),
-        "t.country_code = s.country_code AND "
-        "t.dataset_type = s.dataset_type AND "
-        "t.source_timestamp = s.source_timestamp AND "
-        "coalesce(t.production_type_raw, '') = coalesce(s.production_type_raw, '') AND "
-        "coalesce(t.business_type, '') = coalesce(s.business_type, '')",
+        spark, df, table_name, entsoe_bronze_schema(), ENTSOE_BRONZE_KEY_COLS,
     )
 
 

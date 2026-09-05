@@ -21,11 +21,23 @@ on automatic schema evolution at all, on any environment:
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Dict
+from typing import TYPE_CHECKING, Dict, Sequence
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, no runtime import
     from pyspark.sql import DataFrame
     from pyspark.sql.types import StructType
+
+# The merge/business key for each Bronze table, defined once here and
+# reused by both the pre-merge dedupe (`dedupe_latest`) and the MERGE
+# condition itself (`write_with_deterministic_schema`) — a single source
+# of truth so the two can never drift apart (drift here is exactly what
+# would make the post-dedupe uniqueness check in
+# `write_with_deterministic_schema` meaningless).
+ENTSOE_BRONZE_KEY_COLS = (
+    "country_code", "dataset_type", "source_timestamp",
+    "production_type_raw", "business_type",
+)
+OPEN_METEO_BRONZE_KEY_COLS = ("country_code", "source_variable", "observation_date")
 
 
 class SchemaMismatchError(Exception):
@@ -35,6 +47,17 @@ class SchemaMismatchError(Exception):
     explicit migration (see `docs/migrations/`) that brings the table's
     schema in line with the current `*_bronze_schema()` definition, then
     rerun.
+    """
+
+
+class DuplicateKeyError(Exception):
+    """The source DataFrame has more than one row for the same merge key.
+
+    Delta's MERGE raises an opaque `DELTA_MULTIPLE_SOURCE_ROW_MATCHING_TARGET_ROW_IN_MERGE`
+    if this reaches `.execute()`. Raised earlier, with the offending keys,
+    because `dedupe_latest` is expected to have already resolved this —
+    seeing it here means `dedupe_latest`'s `key_cols` and the merge key
+    used for this write have drifted apart from each other.
     """
 
 
@@ -131,28 +154,62 @@ def ensure_schema_compatible(existing_schema: "StructType", expected_schema: "St
     )
 
 
+def assert_unique_keys(df: "DataFrame", key_cols: Sequence[str], table_name: str, sample_limit: int = 5) -> None:
+    """Raise `DuplicateKeyError` if `df` has more than one row for the same
+    `key_cols` combination.
+
+    Meant to run on the DataFrame actually about to be merged/written,
+    after `dedupe_latest` — a safety net, not the primary dedupe
+    mechanism. If this ever fires, `dedupe_latest`'s `key_cols` no longer
+    matches the merge key for this table.
+    """
+    from pyspark.sql import functions as F
+
+    duplicates = df.groupBy(*key_cols).count().filter(F.col("count") > 1).limit(sample_limit)
+    sample = [row.asDict() for row in duplicates.collect()]
+    if sample:
+        raise DuplicateKeyError(
+            f"'{table_name}': source DataFrame has multiple rows for the same merge key "
+            f"{list(key_cols)} after dedupe_latest — this should be impossible. "
+            f"Sample duplicate key(s): {sample}"
+        )
+
+
+def _merge_condition(key_cols: Sequence[str]) -> str:
+    # coalesce(..., '') so a nullable key column (e.g. `production_type_raw`,
+    # `business_type` for load/price rows) still matches NULL-to-NULL
+    # instead of Delta's SQL NULL <> NULL never being true.
+    return " AND ".join(f"coalesce(t.{col}, '') = coalesce(s.{col}, '')" for col in key_cols)
+
+
 def write_with_deterministic_schema(
     spark,
     df: "DataFrame",
     table_name: str,
     expected_schema: "StructType",
-    merge_condition: str,
+    key_cols: Sequence[str],
 ) -> int:
     """Create-or-merge `df` into `table_name` without relying on Delta's
     automatic MERGE schema evolution.
 
     `df` must already have been built with `expected_schema` (e.g. via
     `spark.createDataFrame(records, schema=expected_schema)`), and already
-    deduplicated on the merge key.
+    deduplicated on `key_cols` (e.g. via `dedupe_latest`). `key_cols` is
+    the single definition of this table's merge/business key — reused
+    here both to build the MERGE condition and to verify uniqueness,
+    rather than a MERGE condition string maintained separately from the
+    dedupe key.
     """
     from delta.tables import DeltaTable
+
+    assert_unique_keys(df, key_cols, table_name)
 
     if spark.catalog.tableExists(table_name):
         ensure_schema_compatible(spark.table(table_name).schema, expected_schema, table_name)
         target = DeltaTable.forName(spark, table_name)
         (
             target.alias("t")
-            .merge(df.alias("s"), merge_condition)
+            .merge(df.alias("s"), _merge_condition(key_cols))
             .whenMatchedUpdateAll()
             .whenNotMatchedInsertAll()
             .execute()

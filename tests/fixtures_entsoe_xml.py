@@ -93,10 +93,14 @@ GENERATION_WITH_PUMPED_STORAGE_CONSUMPTION_XML = """<?xml version="1.0" encoding
 </GL_MarketDocument>
 """
 
+# `businessType` here (A62, day-ahead prices) is confirmed by a real
+# ENTSO-E response, unlike the rest of this fixture — a live reprocess
+# run against real data wrote `business_type='A62'` for every price row.
 PRICE_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <Publication_MarketDocument xmlns="urn:iec62325.351:tc57wg16:451-3:publicationdocument:7:0">
   <mRID>doc-price-789</mRID>
   <TimeSeries>
+    <businessType>A62</businessType>
     <currency_Unit.name>EUR</currency_Unit.name>
     <Period>
       <timeInterval><start>2024-01-01T00:00Z</start></timeInterval>

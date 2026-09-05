@@ -102,7 +102,11 @@ def _default_spark_writer(spark, records: List[dict], table_name: str) -> int:
     schema evolution (unsupported on Databricks serverless Standard
     environment v5 — see `delta_schema` module docstring).
     """
-    from src.ingestion.delta_schema import open_meteo_bronze_schema, write_with_deterministic_schema
+    from src.ingestion.delta_schema import (
+        OPEN_METEO_BRONZE_KEY_COLS,
+        open_meteo_bronze_schema,
+        write_with_deterministic_schema,
+    )
     from src.transformations.dedupe import dedupe_latest
 
     if not records:
@@ -110,17 +114,11 @@ def _default_spark_writer(spark, records: List[dict], table_name: str) -> int:
 
     df = dedupe_latest(
         spark.createDataFrame(records, schema=open_meteo_bronze_schema()),
-        key_cols=["country_code", "source_variable", "observation_date"],
+        key_cols=OPEN_METEO_BRONZE_KEY_COLS,
     )
 
     return write_with_deterministic_schema(
-        spark,
-        df,
-        table_name,
-        open_meteo_bronze_schema(),
-        "t.country_code = s.country_code AND "
-        "t.source_variable = s.source_variable AND "
-        "t.observation_date = s.observation_date",
+        spark, df, table_name, open_meteo_bronze_schema(), OPEN_METEO_BRONZE_KEY_COLS,
     )
 
 
