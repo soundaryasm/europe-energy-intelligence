@@ -272,4 +272,4 @@ def test_run_ingestion_trims_dataset_response_to_the_requested_window():
     # Only the 2024-01-01 window's two points survive; the 2024-01-02
     # window's (identical, mocked) response gets fully filtered out.
     assert len(written_records) == 2
-    assert all(r["source_timestamp"] == "2024-01-01T00:00:00" for r in written_records)
+    assert all(r["source_timestamp"] == "2024-01-01T00:00:00Z" for r in written_records)

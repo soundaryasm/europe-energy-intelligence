@@ -67,9 +67,13 @@ def build_bronze_records(
                 "country_code": country_domain.country_code,
                 "domain": country_domain.domain,
                 "dataset_type": dataset.name,
-                # Always UTC (ENTSO-E's API is UTC-only). Stored without an
-                # offset suffix so downstream Spark parsing is unambiguous.
-                "source_timestamp": point["source_timestamp"].strftime("%Y-%m-%dT%H:%M:%S"),
+                # Always UTC (ENTSO-E's API is UTC-only). The trailing "Z"
+                # is kept (not stripped) so Spark's timestamp parser reads
+                # this as an absolute instant regardless of the session's
+                # `spark.sql.session.timeZone` — a naive (no-zone) string
+                # would instead be silently interpreted as being in
+                # whatever that session default happens to be.
+                "source_timestamp": point["source_timestamp"].strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "source_resolution": point["resolution"],
                 "value": point["value"],
                 "unit": point.get("unit"),

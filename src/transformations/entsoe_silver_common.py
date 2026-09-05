@@ -41,18 +41,24 @@ def interval_hours_udf():
 
 
 def with_local_date(df: "DataFrame", country_timezones: Dict[str, str]) -> "DataFrame":
-    """Bucket UTC source_timestamp into each country's local calendar date."""
+    """Bucket UTC source_timestamp into each country's local calendar date.
+
+    `source_timestamp` carries an explicit "Z" suffix (see
+    `entsoe_bronze.build_bronze_records`). Parsing it with no explicit
+    format lets Spark's own ISO-8601 parser recognize that trailing zone
+    marker and resolve an absolute instant directly — unlike an explicit
+    no-offset pattern (e.g. `"yyyy-MM-dd'T'HH:mm:ss"`), which would parse
+    the same digits as a *local* timestamp in whatever
+    `spark.sql.session.timeZone` happens to be, silently depending on
+    Databricks' current `Etc/UTC` default rather than being correct
+    regardless of it.
+    """
     from pyspark.sql import functions as F
 
     timezone_map = F.create_map([F.lit(x) for pair in country_timezones.items() for x in pair])
     return df.withColumn("_tz", timezone_map[F.col("country_code")]).withColumn(
         "local_date",
-        F.to_date(
-            F.from_utc_timestamp(
-                F.to_timestamp(F.col("source_timestamp"), "yyyy-MM-dd'T'HH:mm:ss"),
-                F.col("_tz"),
-            )
-        ),
+        F.to_date(F.from_utc_timestamp(F.to_timestamp(F.col("source_timestamp")), F.col("_tz"))),
     )
 
 
