@@ -24,6 +24,7 @@ import pytest
 
 pytest.importorskip("pyspark")
 
+from src.ingestion.delta_schema import entsoe_bronze_schema
 from src.transformations.entsoe_silver_common import (
     _expected_day_duration_hours,
     with_completeness_status,
@@ -56,6 +57,19 @@ def test_expected_day_duration_hours_is_24_the_day_before_and_after(tz_name, loc
 
 
 def _hourly_bronze_rows(country_code: str, domain: str, utc_start: datetime, n_hours: int) -> list:
+    """Bronze-shaped `load` rows for exactly one DST test window.
+
+    Every field present in `entsoe_bronze_schema()` is set explicitly, so
+    these rows can be loaded with that schema instead of relying on
+    per-column type inference (which fails on Spark Connect/Serverless
+    when an all-None column, e.g. `production_type_raw` here, gives it
+    nothing to infer a type from). `production_type_raw` and `currency`
+    remain `None` because that's what a real `load` Bronze row has — a
+    `load` document carries no psrType or currency (see
+    `entsoe_bronze.build_bronze_records`) — not filled with a placeholder
+    just to satisfy inference. `business_type` is `"A04"` (not None)
+    because that's what a real `load` row's businessType actually is.
+    """
     return [
         {
             "country_code": country_code,
@@ -66,6 +80,7 @@ def _hourly_bronze_rows(country_code: str, domain: str, utc_start: datetime, n_h
             "value": 1000.0,
             "unit": "MAW",
             "production_type_raw": None,
+            "business_type": "A04",
             "currency": None,
             "source_document_mrid": "doc-dst-test",
             "requested_start_date": utc_start.date().isoformat(),
@@ -88,7 +103,7 @@ def test_with_local_date_buckets_dst_window_into_one_local_date_without_losing_r
     # there is no ambiguity to lose a row to: all 25 distinct UTC
     # timestamps must survive as 25 distinct rows for that one local_date.
     rows = _hourly_bronze_rows("XX", "domain", utc_start, expected_hours)
-    df = spark_session.createDataFrame(rows)
+    df = spark_session.createDataFrame(rows, schema=entsoe_bronze_schema())
 
     result = with_local_date(df, {"XX": tz_name}).collect()
 
@@ -105,7 +120,7 @@ def test_with_completeness_status_marks_fully_covered_dst_day_as_complete(
     # included) — that must not be falsely read as 1 missing hour of
     # otherwise-available data and marked `partial`.
     rows = _hourly_bronze_rows("XX", "domain", utc_start, expected_hours)
-    df = with_local_date(spark_session.createDataFrame(rows), {"XX": tz_name})
+    df = with_local_date(spark_session.createDataFrame(rows, schema=entsoe_bronze_schema()), {"XX": tz_name})
     aggregated = df.groupBy("country_code", "local_date").agg({"source_timestamp": "count"}).withColumnRenamed(
         "count(source_timestamp)", "source_interval_count"
     )
@@ -129,7 +144,7 @@ def test_build_silver_energy_demand_daily_marks_full_dst_day_complete(
     # real 23/25-hour day length, not a hard-coded 24.
     country_code = "IE" if tz_name == "Europe/Dublin" else "DE"
     rows = _hourly_bronze_rows(country_code, "domain", utc_start, expected_hours)
-    bronze_df = spark_session.createDataFrame(rows)
+    bronze_df = spark_session.createDataFrame(rows, schema=entsoe_bronze_schema())
 
     result = build_silver_energy_demand_daily(bronze_df, {country_code: tz_name}).collect()
 
@@ -150,7 +165,7 @@ def test_build_silver_energy_demand_daily_marks_missing_hour_as_partial_on_dst_d
     # genuine gap goes undetected.
     country_code = "IE" if tz_name == "Europe/Dublin" else "DE"
     rows = _hourly_bronze_rows(country_code, "domain", utc_start, expected_hours - 1)
-    bronze_df = spark_session.createDataFrame(rows)
+    bronze_df = spark_session.createDataFrame(rows, schema=entsoe_bronze_schema())
 
     result = build_silver_energy_demand_daily(bronze_df, {country_code: tz_name}).collect()
 
