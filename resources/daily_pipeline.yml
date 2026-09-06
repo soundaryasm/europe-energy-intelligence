@@ -131,7 +131,7 @@ resources:
           notebook_task:
             notebook_path: "${workspace.file_path}/notebooks/serving/publish_postgres"
             base_parameters:
-              gold_catalog: "main.gold" # confirm against the real Unity Catalog layout before deploy
+              gold_catalog: "workspace.gold" # matches the validated Gold location (Unity Catalog "workspace" catalog, "gold" schema)
               secret_scope: "${var.postgres_secret_scope}"
           timeout_seconds: 1800
           max_retries: 2
