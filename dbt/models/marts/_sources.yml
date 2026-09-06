@@ -5,12 +5,16 @@ version: 2
 # directly and lineage stays expressed through ref()/source(), not
 # hard-coded execution order (Spec 004 "Lineage").
 #
-# `schema` is parameterized via the dbt target/profile (see
-# ../profiles.yml.example) rather than hard-coded, so the same project
-# works against dev/prod catalogs without editing SQL.
+# `schema` is hard-coded to `default` — that's where src/transformations
+# actually writes Silver tables (see notebooks/transformations/
+# transform_silver.py; those writers take no schema/catalog argument at
+# all). It must NOT track `target.schema`: that's the Gold *output*
+# schema, and tying the two together previously made every source
+# resolve to `<catalog>.gold.silver_*`, which doesn't exist, instead of
+# the real `<catalog>.default.silver_*`.
 sources:
   - name: silver
-    schema: "{{ target.schema | default('silver') }}"
+    schema: default
     tables:
       - name: silver_energy_demand_daily
         description: >

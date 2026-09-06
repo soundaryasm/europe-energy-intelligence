@@ -29,5 +29,9 @@ vars:
 models:
   europe_energy_intelligence:
     +materialized: table
-    marts:
-      +schema: gold
+    # No `+schema:` override here: dbt's default generate_schema_name
+    # macro concatenates `<target.schema>_<custom_schema>` whenever a
+    # custom schema is set, which produced `gold_gold` since the profile
+    # target schema is already `gold` (see profiles.yml.example). Gold
+    # models should land directly in the target schema, so this is left
+    # unset and inherits `target.schema` as-is.
