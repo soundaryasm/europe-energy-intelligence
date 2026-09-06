@@ -66,6 +66,7 @@ resources:
               execution_mode: "{{job.parameters.execution_mode}}"
               start_date: "{{job.parameters.start_date}}"
               end_date: "{{job.parameters.end_date}}"
+              lookback_days: "{{job.parameters.lookback_days}}"
           timeout_seconds: 3600
           max_retries: 2
           min_retry_interval_millis: 300000 # 5 minutes

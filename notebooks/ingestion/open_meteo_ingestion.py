@@ -14,12 +14,20 @@
 
 from datetime import date
 
+from src.ingestion.open_meteo_client import (
+    OPEN_METEO_ARCHIVE_URL,
+    OPEN_METEO_FORECAST_URL,
+    SOURCE_ENDPOINT,
+    SOURCE_ENDPOINT_FORECAST,
+)
 from src.ingestion.open_meteo_pipeline import (
     backfill_date_range,
     run_ingestion,
 )
 from src.orchestration.processing_window import (
     BACKFILL,
+    DAILY,
+    DEFAULT_OPEN_METEO_LOOKBACK_DAYS,
     VALID_EXECUTION_MODES,
     resolve_open_meteo_window,
 )
@@ -29,10 +37,14 @@ from src.orchestration.processing_window import (
 dbutils.widgets.dropdown("execution_mode", "daily", list(VALID_EXECUTION_MODES), "Execution mode")
 dbutils.widgets.text("start_date", "", "Start date (backfill/reprocess, YYYY-MM-DD)")
 dbutils.widgets.text("end_date", "", "End date (backfill/reprocess, YYYY-MM-DD)")
+dbutils.widgets.text(
+    "lookback_days", str(DEFAULT_OPEN_METEO_LOOKBACK_DAYS), "Daily-mode recent-date lookback (days)"
+)
 
 execution_mode = dbutils.widgets.get("execution_mode")
 start_date_param = dbutils.widgets.get("start_date")
 end_date_param = dbutils.widgets.get("end_date")
+lookback_days = int(dbutils.widgets.get("lookback_days"))
 
 # COMMAND ----------
 
@@ -47,12 +59,24 @@ if execution_mode == BACKFILL and (explicit_start is None or explicit_end is Non
     explicit_end = explicit_end or default_end
 
 start_date, end_date = resolve_open_meteo_window(
-    execution_mode, start_date=explicit_start, end_date=explicit_end
+    execution_mode, start_date=explicit_start, end_date=explicit_end, lookback_days=lookback_days
 )
 
 # COMMAND ----------
 
-result = run_ingestion(start_date, end_date, spark=spark)
+# `daily` mode targets recent dates, which the Historical/Archive API
+# (ERA5 reanalysis) has not yet settled for — use the Forecast API
+# instead (operational models, refreshed every 1-6 hours). Backfill and
+# reprocess target older, already-settled dates, where Archive is right.
+if execution_mode == DAILY:
+    endpoint_url, source_endpoint_label = OPEN_METEO_FORECAST_URL, SOURCE_ENDPOINT_FORECAST
+else:
+    endpoint_url, source_endpoint_label = OPEN_METEO_ARCHIVE_URL, SOURCE_ENDPOINT
+
+result = run_ingestion(
+    start_date, end_date, spark=spark,
+    endpoint_url=endpoint_url, source_endpoint_label=source_endpoint_label,
+)
 
 print(f"Execution mode:      {execution_mode}")
 print(f"Requested range:     {result.start_date} to {result.end_date}")

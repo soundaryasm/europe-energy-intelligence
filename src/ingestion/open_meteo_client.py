@@ -20,6 +20,19 @@ logger = logging.getLogger(__name__)
 OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 SOURCE_ENDPOINT = "archive_daily"
 
+# Forecast API (api.open-meteo.com), not the Historical/Archive API, for
+# recent dates. The Historical API's ERA5-reanalysis data has a real
+# settlement lag (confirmed empirically: the same date's value differs
+# between the two endpoints, and the Historical API's own value for a
+# very recent date is provisional and can still change on a later
+# fetch) — the Forecast API's operational models (also supporting the
+# same `start_date`/`end_date` params, confirmed against real responses)
+# refresh every 1-6 hours instead, which fits a daily 02:00 pipeline far
+# better. Backfill/reprocess of settled historical dates still use the
+# Archive API above, where this lag is a non-issue.
+OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+SOURCE_ENDPOINT_FORECAST = "forecast_daily"
+
 # Spec 001: "Use Open-Meteo daily variables where available rather than
 # retrieving hourly observations solely to calculate daily averages...
 # The MVP does not require hourly weather ingestion." The Historical
@@ -89,13 +102,20 @@ def _validate_response_payload(payload: Any, request: OpenMeteoRequest) -> None:
 def fetch_weather(
     request: OpenMeteoRequest,
     *,
+    endpoint_url: str = OPEN_METEO_ARCHIVE_URL,
     session: Optional[Any] = None,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     max_retries: int = DEFAULT_MAX_RETRIES,
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> dict:
-    """Fetch raw historical weather data for one country/date range.
+    """Fetch raw daily weather data for one country/date range.
+
+    `endpoint_url` defaults to the Historical/Archive API; pass
+    `OPEN_METEO_FORECAST_URL` for recent dates instead (see that
+    constant's docstring for why). Both endpoints accept the identical
+    `start_date`/`end_date`/`daily`/`timezone` parameters this function
+    builds, so no other request-shape change is needed between them.
 
     Transient network errors and 5xx/429/408 responses are retried a
     bounded number of times. Non-retryable HTTP errors and structurally
@@ -107,16 +127,17 @@ def fetch_weather(
     total_attempts = max_retries + 1
 
     logger.info(
-        "Requesting Open-Meteo weather: country=%s start=%s end=%s",
+        "Requesting Open-Meteo weather: country=%s start=%s end=%s endpoint=%s",
         request.country_code,
         request.start_date,
         request.end_date,
+        endpoint_url,
     )
 
     last_error: Optional[Exception] = None
     for attempt in range(1, total_attempts + 1):
         try:
-            response = http.get(OPEN_METEO_ARCHIVE_URL, params=params, timeout=timeout)
+            response = http.get(endpoint_url, params=params, timeout=timeout)
         except requests.exceptions.RequestException as exc:
             last_error = exc
             logger.warning(

@@ -19,8 +19,10 @@ from src.ingestion.open_meteo_bronze import build_bronze_records
 from src.ingestion.open_meteo_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_TIMEOUT_SECONDS,
+    OPEN_METEO_ARCHIVE_URL,
     OpenMeteoAPIError,
     OpenMeteoRequest,
+    SOURCE_ENDPOINT,
     fetch_weather,
 )
 from src.orchestration.processing_window import latest_completed_date
@@ -129,12 +131,21 @@ def run_ingestion(
     spark=None,
     countries: Optional[List[CountryConfig]] = None,
     table_name: str = BRONZE_TABLE_NAME,
+    endpoint_url: str = OPEN_METEO_ARCHIVE_URL,
+    source_endpoint_label: str = SOURCE_ENDPOINT,
     fetch_fn: Callable[..., dict] = fetch_weather,
     spark_writer: Callable[[object, List[dict], str], int] = _default_spark_writer,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     max_retries: int = DEFAULT_MAX_RETRIES,
 ) -> IngestionResult:
     """Ingest Open-Meteo Bronze weather data for every configured country.
+
+    `endpoint_url`/`source_endpoint_label` default to the Historical/
+    Archive API (settled data, right for backfill/reprocess of older
+    dates). The daily ingestion notebook instead passes
+    `OPEN_METEO_FORECAST_URL`/`SOURCE_ENDPOINT_FORECAST` for recent dates
+    — see `open_meteo_client` for why the two APIs aren't interchangeable
+    for recent dates.
 
     Countries are processed independently: one country's failure is
     recorded in the result and logged, but does not stop the others from
@@ -165,10 +176,11 @@ def run_ingestion(
                     start_date=start_date,
                     end_date=end_date,
                 ),
+                endpoint_url=endpoint_url,
                 timeout=timeout,
                 max_retries=max_retries,
             )
-            records = build_bronze_records(payload, country)
+            records = build_bronze_records(payload, country, source_endpoint=source_endpoint_label)
             if not records:
                 raise OpenMeteoAPIError(
                     f"Open-Meteo returned no records for {country.country_code} "

@@ -38,3 +38,73 @@ countries:
     latitude: 52.3676
     longitude: 4.9041
     timezone: Europe/Amsterdam
+
+  - country_code: BE
+    country_name: Belgium
+    reference_location: Brussels
+    latitude: 50.8503
+    longitude: 4.3517
+    timezone: Europe/Brussels
+
+  - country_code: PT
+    country_name: Portugal
+    reference_location: Lisbon
+    latitude: 38.7223
+    longitude: -9.1393
+    timezone: Europe/Lisbon
+
+  - country_code: PL
+    country_name: Poland
+    reference_location: Warsaw
+    latitude: 52.2297
+    longitude: 21.0122
+    timezone: Europe/Warsaw
+
+  - country_code: CZ
+    country_name: Czech Republic
+    reference_location: Prague
+    latitude: 50.0755
+    longitude: 14.4378
+    timezone: Europe/Prague
+
+  - country_code: FI
+    country_name: Finland
+    reference_location: Helsinki
+    latitude: 60.1699
+    longitude: 24.9384
+    timezone: Europe/Helsinki
+
+  - country_code: HU
+    country_name: Hungary
+    reference_location: Budapest
+    latitude: 47.4979
+    longitude: 19.0402
+    timezone: Europe/Budapest
+
+  - country_code: RO
+    country_name: Romania
+    reference_location: Bucharest
+    latitude: 44.4268
+    longitude: 26.1025
+    timezone: Europe/Bucharest
+
+  - country_code: SK
+    country_name: Slovakia
+    reference_location: Bratislava
+    latitude: 48.1486
+    longitude: 17.1077
+    timezone: Europe/Bratislava
+
+  - country_code: SI
+    country_name: Slovenia
+    reference_location: Ljubljana
+    latitude: 46.0569
+    longitude: 14.5058
+    timezone: Europe/Ljubljana
+
+  - country_code: EE
+    country_name: Estonia
+    reference_location: Tallinn
+    latitude: 59.4370
+    longitude: 24.7536
+    timezone: Europe/Tallinn

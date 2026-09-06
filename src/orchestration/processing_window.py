@@ -23,6 +23,16 @@ VALID_EXECUTION_MODES = (DAILY, BACKFILL, REPROCESS)
 # Spec 006: "Initial MVP lookback: 3 calendar days."
 DEFAULT_ENTSOE_LOOKBACK_DAYS = 3
 
+# Open-Meteo's daily path now uses the Forecast API (operational models,
+# refreshed every 1-6 hours) rather than the Historical/Archive API
+# (ERA5 reanalysis, which settles over ~2 days) for recent dates — see
+# `open_meteo_client.OPEN_METEO_FORECAST_URL`. A rolling lookback, same
+# shape as ENTSO-E's, means a value fetched from an early model run gets
+# re-fetched and can be replaced by a later, more accurate run before the
+# window closes. Kept at the same 3 days as ENTSO-E rather than a
+# separate number, by explicit decision.
+DEFAULT_OPEN_METEO_LOOKBACK_DAYS = 3
+
 
 class ProcessingWindowError(ValueError):
     """Raised when execution_mode/start_date/end_date/lookback_days are inconsistent."""
@@ -59,18 +69,25 @@ def resolve_open_meteo_window(
     *,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    lookback_days: int = DEFAULT_OPEN_METEO_LOOKBACK_DAYS,
     reference_date: Optional[date] = None,
 ) -> Tuple[date, date]:
     """Resolve the Open-Meteo processing window for one execution_mode.
 
-    `daily`: only the latest completed weather date (Spec 006
-    "Open-Meteo: Normally process the latest completed weather date").
-    `backfill`/`reprocess`: the explicitly supplied start_date/end_date.
+    `daily`: a rolling recent-date lookback window ending at the latest
+    completed date (mirrors `resolve_entsoe_window` — the Forecast API
+    backing this path serves a value that can still improve as a later
+    model run supersedes an earlier one; see
+    `DEFAULT_OPEN_METEO_LOOKBACK_DAYS`). `backfill`/`reprocess`: the
+    explicitly supplied start_date/end_date (against the Historical/
+    Archive API instead — see the ingestion notebook).
     """
     _validate_mode(execution_mode)
     if execution_mode == DAILY:
+        if lookback_days <= 0:
+            raise ProcessingWindowError("lookback_days must be a positive integer")
         anchor = latest_completed_date(reference_date)
-        return anchor, anchor
+        return anchor - timedelta(days=lookback_days - 1), anchor
     return _require_explicit_range(execution_mode, start_date, end_date)
 
 
