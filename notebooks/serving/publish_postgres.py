@@ -22,14 +22,16 @@ from src.serving.postgres_schema import ALL_TABLE_DDL, INDEX_DDL
 # COMMAND ----------
 
 dbutils.widgets.text("gold_catalog", "", "Gold catalog.schema (e.g. main.gold)")
-dbutils.widgets.text("secret_scope", "postgres", "Databricks secret scope")
+dbutils.widgets.text("secret_scope", "europe-energy-intelligence", "Databricks secret scope")
+dbutils.widgets.text("secret_key", "POSTGRES_URL", "Databricks secret key")
 
 gold_catalog = dbutils.widgets.get("gold_catalog")
 secret_scope = dbutils.widgets.get("secret_scope")
+secret_key = dbutils.widgets.get("secret_key")
 
 # Connection URL retrieved via Databricks-managed secrets only — never
 # hard-coded, never logged, never committed.
-os.environ["POSTGRES_URL"] = dbutils.secrets.get(scope=secret_scope, key="url")
+os.environ["POSTGRES_URL"] = dbutils.secrets.get(scope=secret_scope, key=secret_key)
 
 # COMMAND ----------
 

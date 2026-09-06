@@ -1,4 +1,9 @@
 requests
 PyYAML
-psycopg[binary]
+# Not psycopg[binary]: its bundled libpq/OpenSSL crashes the Python
+# process (SIGABRT on import) inside Databricks Serverless, where gRPC
+# has already loaded a different OpenSSL build into the same process.
+# Plain psycopg binds to the system libpq instead - confirmed working
+# against a real Aiven Postgres connection on Databricks Serverless.
+psycopg
 pytest

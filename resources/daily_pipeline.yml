@@ -10,10 +10,10 @@ variables:
     description: "Databricks SQL Warehouse ID used by the build_dbt_gold task."
   postgres_secret_scope:
     description: "Databricks secret scope holding PostgreSQL credentials."
-    default: postgres
+    default: europe-energy-intelligence
   entsoe_secret_scope:
     description: "Databricks secret scope holding the ENTSO-E API token."
-    default: entsoe
+    default: europe-energy-intelligence
 
 resources:
   jobs:
