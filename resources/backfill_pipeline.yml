@@ -1,0 +1,63 @@
+# Historical backfill job definition (agreed design, see project memory
+# `project_backfill_architecture_plan`). Separate from
+# `daily_pipeline.yml`'s job entirely — same ingestion modules, different
+# orchestration, no shared schedule/state with the daily freshness run.
+#
+# NOT VALIDATED against a real Databricks workspace yet.
+
+variables:
+  entsoe_secret_scope:
+    description: "Databricks secret scope holding the ENTSO-E API token."
+    default: europe-energy-intelligence
+
+resources:
+  jobs:
+    europe_energy_intelligence_backfill:
+      name: "European Energy Intelligence - Historical Backfill"
+
+      # Every 2 hours, 01:00 through 23:00. UTC, not a DST-observing
+      # zone: Databricks explicitly warns an interval-repeating schedule
+      # in a DST zone can skip or double-fire during the transition
+      # hour — this schedule has no local-calendar-alignment need (only
+      # the daily pipeline's single 02:00 Europe/Dublin fire does), so
+      # there is no reason to accept that risk here.
+      schedule:
+        quartz_cron_expression: "0 0 1-23/2 * * ?"
+        timezone_id: "UTC"
+        pause_status: UNPAUSED
+
+      parameters:
+        - name: secret_scope
+          default: "${var.entsoe_secret_scope}"
+        - name: secret_key
+          default: "ENTSOE_API_TOKEN"
+
+      environments:
+        - environment_key: python_notebook_env
+          spec:
+            environment_version: "5"
+            dependencies:
+              - -r ${workspace.file_path}/requirements.txt
+
+      tasks:
+        - task_key: backfill_month
+          environment_key: python_notebook_env
+          notebook_task:
+            notebook_path: "${workspace.file_path}/notebooks/orchestration/backfill_month"
+            base_parameters:
+              secret_scope: "{{job.parameters.secret_scope}}"
+              secret_key: "{{job.parameters.secret_key}}"
+              # Dynamic value reference, resolved to this job's own
+              # numeric ID at run time — needed so the notebook can
+              # pause its own schedule once the backfill is complete.
+              job_id: "{{job.id}}"
+          timeout_seconds: 5400
+          # A month left partially covered is expected to be retried by
+          # the *next scheduled run* of this same job (the checkpoint
+          # keeps it eligible), not by an immediate task-level retry —
+          # retrying instantly against the same failure mode (e.g. an
+          # API outage) wastes one of the account's 5 concurrent-task
+          # slots for no benefit. See daily_pipeline.yml's tasks for
+          # where an immediate retry *does* make sense (transient
+          # failures on the always-current daily window).
+          max_retries: 0

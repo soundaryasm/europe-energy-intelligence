@@ -40,8 +40,8 @@ dbutils.widgets.text("end_date", "", "End date (backfill/reprocess, YYYY-MM-DD)"
 dbutils.widgets.text(
     "lookback_days", str(DEFAULT_ENTSOE_LOOKBACK_DAYS), "Daily-mode recent-date lookback (days)"
 )
-dbutils.widgets.text("secret_scope", "entsoe", "Databricks secret scope")
-dbutils.widgets.text("secret_key", "api-token", "Databricks secret key")
+dbutils.widgets.text("secret_scope", "europe-energy-intelligence", "Databricks secret scope")
+dbutils.widgets.text("secret_key", "ENTSOE_API_TOKEN", "Databricks secret key")
 
 execution_mode = dbutils.widgets.get("execution_mode")
 start_date_param = dbutils.widgets.get("start_date")

@@ -82,7 +82,26 @@ resources:
               end_date: "{{job.parameters.end_date}}"
               lookback_days: "{{job.parameters.lookback_days}}"
               secret_scope: "${var.entsoe_secret_scope}"
+              secret_key: "ENTSOE_API_TOKEN"
           timeout_seconds: 3600
+          max_retries: 2
+          min_retry_interval_millis: 300000
+          retry_on_timeout: true
+
+        # World Bank is intentionally independent of everything else in
+        # this DAG: no date-range parameters (it always fetches whatever
+        # year is currently current — see worldbank_ingestion.py), no
+        # secret (no API key required), and no downstream dependents —
+        # Silver/Gold/Postgres do not consume it yet. It runs in
+        # parallel with the other two ingestion tasks purely to land in
+        # Bronze daily; a failure here must not block ENTSO-E/Open-Meteo
+        # reaching Silver/Gold/Postgres, so nothing downstream depends
+        # on it.
+        - task_key: ingest_worldbank
+          environment_key: python_notebook_env
+          notebook_task:
+            notebook_path: "${workspace.file_path}/notebooks/ingestion/worldbank_ingestion"
+          timeout_seconds: 1800
           max_retries: 2
           min_retry_interval_millis: 300000
           retry_on_timeout: true

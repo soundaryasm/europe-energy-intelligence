@@ -15,6 +15,7 @@ JOB_CONFIG_PATH = Path(__file__).resolve().parents[1] / "resources" / "daily_pip
 EXPECTED_TASK_KEYS = {
     "ingest_open_meteo",
     "ingest_entsoe",
+    "ingest_worldbank",
     "transform_silver",
     "build_dbt_gold",
     "publish_postgres",
@@ -31,7 +32,7 @@ def _tasks_by_key(job):
     return {task["task_key"]: task for task in job["tasks"]}
 
 
-def test_job_config_defines_all_five_expected_tasks():
+def test_job_config_defines_all_expected_tasks():
     job = _load_job()
     assert {task["task_key"] for task in job["tasks"]} == EXPECTED_TASK_KEYS
 
@@ -60,12 +61,32 @@ def test_ingestion_tasks_have_no_dependencies():
     tasks = _tasks_by_key(_load_job())
     assert "depends_on" not in tasks["ingest_open_meteo"]
     assert "depends_on" not in tasks["ingest_entsoe"]
+    assert "depends_on" not in tasks["ingest_worldbank"]
 
 
-def test_silver_depends_on_both_ingestion_tasks():
+def test_silver_depends_on_only_open_meteo_and_entsoe_not_worldbank():
+    # World Bank is Bronze-only for now (no Silver/Gold/Postgres builder
+    # exists yet) and deliberately independent — a World Bank failure
+    # must not block ENTSO-E/Open-Meteo from reaching Silver/Gold/Postgres.
     tasks = _tasks_by_key(_load_job())
     depends_on = {d["task_key"] for d in tasks["transform_silver"]["depends_on"]}
     assert depends_on == {"ingest_open_meteo", "ingest_entsoe"}
+
+
+def test_nothing_depends_on_worldbank():
+    job = _load_job()
+    for task in job["tasks"]:
+        depends_on = {d["task_key"] for d in task.get("depends_on", [])}
+        assert "ingest_worldbank" not in depends_on
+
+
+def test_entsoe_task_uses_the_real_secret_key():
+    # The stored secret is named ENTSOE_API_TOKEN, not the notebook
+    # widget's own stale default ("api-token") — must be explicit here,
+    # not left to fall through to that default.
+    tasks = _tasks_by_key(_load_job())
+    base_params = tasks["ingest_entsoe"]["notebook_task"]["base_parameters"]
+    assert base_params["secret_key"] == "ENTSOE_API_TOKEN"
 
 
 def test_dbt_depends_on_silver():

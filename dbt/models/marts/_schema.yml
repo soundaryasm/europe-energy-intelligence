@@ -78,6 +78,29 @@ models:
               min_value: 0
               max_value: 100
               inclusive: true
+      - name: population
+        description: >
+          Annual World Bank population for this country/year, repeated
+          across every day of that year. NULL for a year World Bank has
+          not published yet (e.g. the current year) — not an error.
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: gdp_constant_2015_usd
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: urban_population_pct
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+              inclusive: true
+      - name: demand_kwh_per_capita
+        description: NULL whenever demand or population for that country/year is unknown, never a fabricated 0.
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
     tests:
       - dbt_utils.unique_combination_of_columns:
           combination_of_columns:

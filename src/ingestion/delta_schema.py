@@ -39,6 +39,7 @@ ENTSOE_BRONZE_KEY_COLS = (
 )
 OPEN_METEO_BRONZE_KEY_COLS = ("country_code", "source_variable", "observation_date")
 WORLDBANK_BRONZE_KEY_COLS = ("country_code", "indicator_code", "year")
+BACKFILL_CHECKPOINT_KEY_COLS = ("source", "country_code", "dataset", "month_start")
 
 
 class SchemaMismatchError(Exception):
@@ -146,6 +147,35 @@ def worldbank_bronze_schema() -> "StructType":
             StructField("value", DoubleType(), True),
             StructField("source_system", StringType(), False),
             StructField("ingestion_timestamp", StringType(), False),
+        ]
+    )
+
+
+def backfill_checkpoint_schema() -> "StructType":
+    """Application-owned schema for `backfill_checkpoint` (control-plane
+    state for the historical backfill orchestrator, not source data).
+
+    One row per (source, country_code, dataset, month_start). `dataset`
+    is the ENTSO-E dataset name (load/generation/price) or the literal
+    `"weather"` for Open-Meteo, which has no per-dataset split. Progress
+    is tracked here explicitly — never inferred from MIN/MAX dates in
+    Bronze/Silver, which cannot distinguish "not attempted yet" from
+    "legitimately no data for this period."
+    """
+    from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+
+    return StructType(
+        [
+            StructField("source", StringType(), False),
+            StructField("country_code", StringType(), False),
+            StructField("dataset", StringType(), False),
+            StructField("month_start", StringType(), False),
+            StructField("status", StringType(), False),
+            StructField("attempt_count", IntegerType(), False),
+            StructField("started_at", StringType(), True),
+            StructField("completed_at", StringType(), True),
+            StructField("last_error", StringType(), True),
+            StructField("updated_at", StringType(), False),
         ]
     )
 

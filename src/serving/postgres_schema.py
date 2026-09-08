@@ -45,8 +45,27 @@ CREATE TABLE IF NOT EXISTS fact_energy_daily (
     total_generation_mwh NUMERIC(14, 3),
     renewable_generation_mwh NUMERIC(14, 3),
     renewable_generation_pct NUMERIC(5, 2),
+    population NUMERIC(14, 0),
+    gdp_constant_2015_usd NUMERIC(20, 3),
+    gdp_per_capita_constant_2015_usd NUMERIC(14, 3),
+    urban_population_pct NUMERIC(5, 2),
+    demand_kwh_per_capita NUMERIC(10, 3),
     PRIMARY KEY (country_key, date_key)
 )
+"""
+
+# CREATE TABLE IF NOT EXISTS above only creates the table on a workspace
+# where it doesn't exist yet. If `fact_energy_daily` was already created
+# by an earlier run (before the World Bank columns existed), this adds
+# them to the existing table instead of silently doing nothing —
+# ADD COLUMN IF NOT EXISTS is idempotent either way.
+FACT_ENERGY_DAILY_ADD_WORLDBANK_COLUMNS_DDL = """
+ALTER TABLE fact_energy_daily
+    ADD COLUMN IF NOT EXISTS population NUMERIC(14, 0),
+    ADD COLUMN IF NOT EXISTS gdp_constant_2015_usd NUMERIC(20, 3),
+    ADD COLUMN IF NOT EXISTS gdp_per_capita_constant_2015_usd NUMERIC(14, 3),
+    ADD COLUMN IF NOT EXISTS urban_population_pct NUMERIC(5, 2),
+    ADD COLUMN IF NOT EXISTS demand_kwh_per_capita NUMERIC(10, 3)
 """
 
 FACT_WEATHER_DAILY_DDL = """
@@ -74,10 +93,16 @@ CREATE TABLE IF NOT EXISTS fact_generation_mix_daily (
 """
 
 # Ordered so dimensions are created (and therefore loadable) before facts.
+# FACT_ENERGY_DAILY_ADD_WORLDBANK_COLUMNS_DDL runs every time, right after
+# creating the table — a no-op via ADD COLUMN IF NOT EXISTS once the
+# columns exist, but brings an already-existing table (created before
+# these columns were added here) up to date without a separate manual
+# migration step.
 ALL_TABLE_DDL = (
     DIM_COUNTRY_DDL,
     DIM_DATE_DDL,
     FACT_ENERGY_DAILY_DDL,
+    FACT_ENERGY_DAILY_ADD_WORLDBANK_COLUMNS_DDL,
     FACT_WEATHER_DAILY_DDL,
     FACT_GENERATION_MIX_DAILY_DDL,
 )

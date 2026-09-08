@@ -17,10 +17,12 @@
 from src.config.countries import load_countries
 from src.ingestion.open_meteo_pipeline import BRONZE_TABLE_NAME as OPEN_METEO_BRONZE_TABLE
 from src.ingestion.entsoe_pipeline import BRONZE_TABLE_NAME as ENTSOE_BRONZE_TABLE
+from src.ingestion.worldbank_pipeline import BRONZE_TABLE_NAME as WORLDBANK_BRONZE_TABLE
 from src.transformations.silver_energy_demand import build_silver_energy_demand_daily
 from src.transformations.silver_energy_price import build_silver_energy_price_daily
 from src.transformations.silver_generation_mix import build_silver_generation_mix_daily
 from src.transformations.silver_weather import build_silver_weather_daily
+from src.transformations.silver_worldbank import build_silver_worldbank_annual
 from src.transformations.silver_writer import write_silver_table
 
 # COMMAND ----------
@@ -29,6 +31,15 @@ country_timezones = {c.country_code: c.timezone for c in load_countries()}
 
 open_meteo_bronze = spark.table(OPEN_METEO_BRONZE_TABLE)
 entsoe_bronze = spark.table(ENTSOE_BRONZE_TABLE)
+
+# World Bank Bronze may not exist yet on a fresh workspace (its
+# ingestion task can legitimately write zero rows — e.g. the current
+# year's indicators not published yet — and never create the table).
+# Silver must not fail the whole run over a source that simply hasn't
+# landed anything yet.
+worldbank_bronze = (
+    spark.table(WORLDBANK_BRONZE_TABLE) if spark.catalog.tableExists(WORLDBANK_BRONZE_TABLE) else None
+)
 
 # COMMAND ----------
 
@@ -55,9 +66,17 @@ generation_mix_written = write_silver_table(
     key_cols=["country_code", "local_date", "normalized_production_type"],
 )
 
+worldbank_written = 0
+if worldbank_bronze is not None:
+    worldbank_annual = build_silver_worldbank_annual(worldbank_bronze)
+    worldbank_written = write_silver_table(
+        spark, worldbank_annual, "silver_worldbank_annual", key_cols=["country_code", "year"]
+    )
+
 # COMMAND ----------
 
 print(f"silver_weather_daily rows written:          {weather_written}")
 print(f"silver_energy_demand_daily rows written:     {demand_written}")
 print(f"silver_energy_price_daily rows written:      {price_written}")
 print(f"silver_generation_mix_daily rows written:     {generation_mix_written}")
+print(f"silver_worldbank_annual rows written:         {worldbank_written}")
