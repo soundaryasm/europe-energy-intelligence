@@ -12,14 +12,15 @@ populated from a Databricks-managed secret before this module is used
 
 No automated test in this repository calls `connect()` against a real
 database — that stays intentionally true (Spec 005's live-database
-integration must not be faked in CI). Basic connectivity via
-`POSTGRES_URL` (including its `sslmode` query parameter) has been
-manually confirmed to work with `psycopg.connect()` outside this
-codebase's test suite, which validates the assumptions
-`_config_from_url()`/`as_connect_kwargs()` are built on. The DDL in
-`postgres_schema.py` and the upsert logic in `postgres_publisher.py`
-have not themselves been exercised against a real database yet — that
-remains an open integration step.
+integration must not be faked in CI). Connectivity via `POSTGRES_URL`
+(including its `sslmode` query parameter), the DDL in
+`postgres_schema.py`, and the upsert logic in `postgres_publisher.py`
+have all been manually confirmed end-to-end against the real Aiven
+PostgreSQL instance (2026-09-08): connect, run all DDL including the
+World Bank column migration, upsert a row, upsert the same key again
+with different values (confirmed it updates in place, not a duplicate),
+then clean up — via throwaway rows in a one-off debug notebook, not
+committed here.
 """
 from __future__ import annotations
 
