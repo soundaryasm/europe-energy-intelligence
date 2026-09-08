@@ -10,6 +10,9 @@ envelope implemented here follow ENTSO-E's publicly documented API guide.
 They have NOT been verified against a live ENTSO-E account/response in
 this environment (no API token was available) and must be validated on
 first real execution with real credentials.
+
+Retry mechanics (attempt count, backoff, Retry-After) live in
+`src.ingestion.http`, shared with every other ingestion client.
 """
 from __future__ import annotations
 
@@ -21,8 +24,7 @@ from datetime import date, datetime, timedelta, timezone as dt_timezone
 from typing import Any, Callable, List, Optional, Tuple
 from xml.etree import ElementTree as ET
 
-import requests
-
+from src.ingestion import http as http_client
 from src.ingestion.entsoe_datasets import EntsoeDataset
 
 logger = logging.getLogger(__name__)
@@ -30,12 +32,9 @@ logger = logging.getLogger(__name__)
 ENTSOE_API_URL = "https://web-api.tp.entsoe.eu/api"
 ENTSOE_TOKEN_ENV_VAR = "ENTSOE_API_TOKEN"
 
-DEFAULT_TIMEOUT_SECONDS = 30
-DEFAULT_MAX_RETRIES = 3
-DEFAULT_RETRY_BACKOFF_SECONDS = 2.0
+DEFAULT_TIMEOUT_SECONDS = http_client.DEFAULT_TIMEOUT_SECONDS
+DEFAULT_MAX_RETRIES = http_client.DEFAULT_MAX_ATTEMPTS
 DEFAULT_CHUNK_DAYS = 90
-
-_RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 # ENTSO-E signals an application-level error with this document, even on
 # HTTP 200 (and also uses it for HTTP 4xx bodies).
@@ -221,12 +220,12 @@ def fetch_entsoe_document(
     session: Optional[Any] = None,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     max_retries: int = DEFAULT_MAX_RETRIES,
-    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> str:
     """Fetch one raw ENTSO-E XML document for a country/dataset/date window.
 
-    Bounded retries apply to transient network/HTTP failures. Non-retryable
+    `max_retries` is the total attempt count (see `src.ingestion.http`),
+    which handles retrying transient network/HTTP failures. Non-retryable
     HTTP errors, genuine ENTSO-E error-acknowledgement documents, and
     structurally unexpected responses raise `EntsoeAPIError` immediately.
     An acknowledgement whose reason is "no matching data found" raises
@@ -234,10 +233,8 @@ def fetch_entsoe_document(
     instead — callers that need to tell a legitimately unavailable
     source apart from a real failure should catch that first.
     """
-    http = session or requests
     params = _build_params(request)
     params["securityToken"] = token
-    total_attempts = max_retries + 1
 
     logger.info(
         "Requesting ENTSO-E %s: country=%s domain=%s start=%s end=%s",
@@ -245,49 +242,24 @@ def fetch_entsoe_document(
         request.period_start, request.period_end,
     )
 
-    last_error: Optional[Exception] = None
-    for attempt in range(1, total_attempts + 1):
-        try:
-            response = http.get(ENTSOE_API_URL, params=params, timeout=timeout)
-        except requests.exceptions.RequestException as exc:
-            last_error = exc
-            logger.warning(
-                "ENTSO-E request failed for %s/%s (attempt %s/%s): %s",
-                request.country_code, request.dataset.name, attempt, total_attempts, exc,
-            )
-            if attempt < total_attempts:
-                sleep_fn(retry_backoff_seconds)
-                continue
-            raise EntsoeAPIError(
-                f"ENTSO-E request for {request.country_code}/{request.dataset.name} failed "
-                f"after {total_attempts} attempts: {exc}"
-            ) from exc
-
-        if response.status_code == 200:
-            _validate_response_xml(response.text, request)
-            return response.text
-
-        if response.status_code in _RETRYABLE_STATUS_CODES and attempt < total_attempts:
-            logger.warning(
-                "ENTSO-E request returned status %s for %s/%s (attempt %s/%s); retrying.",
-                response.status_code, request.country_code, request.dataset.name,
-                attempt, total_attempts,
-            )
-            sleep_fn(retry_backoff_seconds)
-            continue
-
-        # ENTSO-E also returns 400 with an Acknowledgement_MarketDocument body
-        # describing the actual problem — surface that reason when present.
-        try:
-            _validate_response_xml(response.text, request)
-        except EntsoeAPIError:
-            raise
-        raise EntsoeAPIError(
-            f"ENTSO-E request for {request.country_code}/{request.dataset.name} failed with "
-            f"status {response.status_code}: {response.text[:500]}"
+    try:
+        response = http_client.request(
+            ENTSOE_API_URL, params=params, timeout=timeout, session=session,
+            max_attempts=max_retries, sleep_fn=sleep_fn,
         )
+    except http_client.HttpRequestError as exc:
+        raise EntsoeAPIError(
+            f"ENTSO-E request for {request.country_code}/{request.dataset.name} failed: {exc}"
+        ) from exc
 
+    if response.status_code == 200:
+        _validate_response_xml(response.text, request)
+        return response.text
+
+    # ENTSO-E also returns 400 with an Acknowledgement_MarketDocument body
+    # describing the actual problem — surface that reason when present.
+    _validate_response_xml(response.text, request)
     raise EntsoeAPIError(
-        f"ENTSO-E request for {request.country_code}/{request.dataset.name} failed after "
-        f"{total_attempts} attempts: {last_error}"
+        f"ENTSO-E request for {request.country_code}/{request.dataset.name} failed with "
+        f"status {response.status_code}: {response.text[:500]}"
     )

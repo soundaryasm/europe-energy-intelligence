@@ -1,4 +1,5 @@
 requests
+tenacity
 PyYAML
 # Not psycopg[binary]: its bundled libpq/OpenSSL crashes the Python
 # process (SIGABRT on import) inside Databricks Serverless, where gRPC

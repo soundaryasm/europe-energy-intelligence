@@ -3,7 +3,8 @@
 This module only handles network I/O, request construction, and response
 validation. It has no PySpark/Delta dependency so it can be exercised
 entirely with plain Python and `unittest.mock` in tests, on or off
-Databricks.
+Databricks. Retry mechanics (attempt count, backoff, Retry-After) live
+in `src.ingestion.http`, shared with every other ingestion client.
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Callable, Mapping, Optional
 
-import requests
+from src.ingestion import http as http_client
 
 logger = logging.getLogger(__name__)
 
@@ -40,13 +41,8 @@ SOURCE_ENDPOINT_FORECAST = "forecast_daily"
 # variables, so no hourly section is requested at all.
 DAILY_VARIABLES = ("temperature_2m_mean", "wind_speed_10m_mean", "shortwave_radiation_sum")
 
-DEFAULT_TIMEOUT_SECONDS = 30
-DEFAULT_MAX_RETRIES = 3
-DEFAULT_RETRY_BACKOFF_SECONDS = 2.0
-
-# Transient failures are worth a bounded retry; client errors (bad request,
-# auth, not found, etc.) are not, and must fail fast and visibly instead.
-_RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+DEFAULT_TIMEOUT_SECONDS = http_client.DEFAULT_TIMEOUT_SECONDS
+DEFAULT_MAX_RETRIES = http_client.DEFAULT_MAX_ATTEMPTS
 
 
 class OpenMeteoAPIError(RuntimeError):
@@ -106,7 +102,6 @@ def fetch_weather(
     session: Optional[Any] = None,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     max_retries: int = DEFAULT_MAX_RETRIES,
-    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> dict:
     """Fetch raw daily weather data for one country/date range.
@@ -117,14 +112,13 @@ def fetch_weather(
     `start_date`/`end_date`/`daily`/`timezone` parameters this function
     builds, so no other request-shape change is needed between them.
 
-    Transient network errors and 5xx/429/408 responses are retried a
-    bounded number of times. Non-retryable HTTP errors and structurally
-    invalid responses raise `OpenMeteoAPIError` immediately, so callers
-    never silently persist incomplete data.
+    `max_retries` is the total attempt count (see `src.ingestion.http`),
+    which handles retrying transient network errors and 5xx/429/408
+    responses. Non-retryable HTTP errors and structurally invalid
+    responses raise `OpenMeteoAPIError` immediately, so callers never
+    silently persist incomplete data.
     """
-    http = session or requests
     params = _build_params(request)
-    total_attempts = max_retries + 1
 
     logger.info(
         "Requesting Open-Meteo weather: country=%s start=%s end=%s endpoint=%s",
@@ -134,44 +128,22 @@ def fetch_weather(
         endpoint_url,
     )
 
-    last_error: Optional[Exception] = None
-    for attempt in range(1, total_attempts + 1):
-        try:
-            response = http.get(endpoint_url, params=params, timeout=timeout)
-        except requests.exceptions.RequestException as exc:
-            last_error = exc
-            logger.warning(
-                "Open-Meteo request failed for %s (attempt %s/%s): %s",
-                request.country_code, attempt, total_attempts, exc,
-            )
-            if attempt < total_attempts:
-                sleep_fn(retry_backoff_seconds)
-                continue
-            raise OpenMeteoAPIError(
-                f"Open-Meteo request for {request.country_code} failed after "
-                f"{total_attempts} attempts: {exc}"
-            ) from exc
-
-        if response.status_code == 200:
-            payload = response.json()
-            _validate_response_payload(payload, request)
-            return payload
-
-        if response.status_code in _RETRYABLE_STATUS_CODES and attempt < total_attempts:
-            logger.warning(
-                "Open-Meteo request returned status %s for %s (attempt %s/%s); retrying.",
-                response.status_code, request.country_code, attempt, total_attempts,
-            )
-            sleep_fn(retry_backoff_seconds)
-            continue
-
-        raise OpenMeteoAPIError(
-            f"Open-Meteo request for {request.country_code} failed with status "
-            f"{response.status_code}: {response.text[:500]}"
+    try:
+        response = http_client.request(
+            endpoint_url, params=params, timeout=timeout, session=session,
+            max_attempts=max_retries, sleep_fn=sleep_fn,
         )
+    except http_client.HttpRequestError as exc:
+        raise OpenMeteoAPIError(
+            f"Open-Meteo request for {request.country_code} failed: {exc}"
+        ) from exc
 
-    # Unreachable: the loop above always returns or raises.
+    if response.status_code == 200:
+        payload = response.json()
+        _validate_response_payload(payload, request)
+        return payload
+
     raise OpenMeteoAPIError(
-        f"Open-Meteo request for {request.country_code} failed after "
-        f"{total_attempts} attempts: {last_error}"
+        f"Open-Meteo request for {request.country_code} failed with status "
+        f"{response.status_code}: {response.text[:500]}"
     )

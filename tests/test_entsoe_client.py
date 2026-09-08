@@ -187,6 +187,9 @@ def test_fetch_entsoe_document_raises_on_unexpected_root_element():
 
 
 def test_fetch_entsoe_document_retries_are_bounded_on_5xx():
+    # Retry mechanics themselves (backoff, Retry-After, attempt count) are
+    # covered generically in tests/test_http.py — this just confirms
+    # max_retries/sleep_fn are actually forwarded to it.
     session = MagicMock()
     session.get.return_value = _mock_response(500, "server error")
 
@@ -195,7 +198,7 @@ def test_fetch_entsoe_document_retries_are_bounded_on_5xx():
             _request(LOAD), token="tok", session=session, max_retries=2, sleep_fn=lambda _: None
         )
 
-    assert session.get.call_count == 3
+    assert session.get.call_count == 2  # max_retries is now the total attempt count
 
 
 def test_fetch_entsoe_document_recovers_after_transient_failure():
@@ -231,7 +234,7 @@ def test_fetch_entsoe_document_retries_are_bounded_on_connection_errors():
 
     with pytest.raises(EntsoeAPIError):
         fetch_entsoe_document(
-            _request(LOAD), token="tok", session=session, max_retries=1, sleep_fn=lambda _: None
+            _request(LOAD), token="tok", session=session, max_retries=2, sleep_fn=lambda _: None
         )
 
-    assert session.get.call_count == 2
+    assert session.get.call_count == 2  # max_retries is now the total attempt count

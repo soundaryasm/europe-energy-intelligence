@@ -38,6 +38,7 @@ ENTSOE_BRONZE_KEY_COLS = (
     "production_type_raw", "business_type",
 )
 OPEN_METEO_BRONZE_KEY_COLS = ("country_code", "source_variable", "observation_date")
+WORLDBANK_BRONZE_KEY_COLS = ("country_code", "indicator_code", "year")
 
 
 class SchemaMismatchError(Exception):
@@ -120,6 +121,29 @@ def open_meteo_bronze_schema() -> "StructType":
             StructField("source_value", DoubleType(), True),
             StructField("source_unit", StringType(), True),
             StructField("source_endpoint", StringType(), False),
+            StructField("source_system", StringType(), False),
+            StructField("ingestion_timestamp", StringType(), False),
+        ]
+    )
+
+
+def worldbank_bronze_schema() -> "StructType":
+    """Application-owned schema for `bronze_worldbank_indicators`.
+
+    Mirrors exactly what `worldbank_bronze.build_bronze_records` emits.
+    `value` is nullable — World Bank can list a record for a
+    country/indicator/year with a `null` value.
+    """
+    from pyspark.sql.types import DoubleType, IntegerType, StringType, StructField, StructType
+
+    return StructType(
+        [
+            StructField("country_code", StringType(), False),
+            StructField("country_name", StringType(), False),
+            StructField("indicator_code", StringType(), False),
+            StructField("indicator_name", StringType(), False),
+            StructField("year", IntegerType(), False),
+            StructField("value", DoubleType(), True),
             StructField("source_system", StringType(), False),
             StructField("ingestion_timestamp", StringType(), False),
         ]
