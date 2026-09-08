@@ -37,9 +37,9 @@ def test_job_config_defines_all_expected_tasks():
     assert {task["task_key"] for task in job["tasks"]} == EXPECTED_TASK_KEYS
 
 
-def test_job_schedule_is_02_00_europe_dublin():
+def test_job_schedule_is_02_00_utc():
     job = _load_job()
-    assert job["schedule"]["timezone_id"] == "Europe/Dublin"
+    assert job["schedule"]["timezone_id"] == "UTC"
     assert job["schedule"]["quartz_cron_expression"] == "0 0 2 * * ?"
 
 
@@ -117,9 +117,26 @@ def test_retries_are_bounded_on_every_task_that_declares_them():
             assert 0 <= task["max_retries"] <= 5  # bounded, not "infinite retries"
 
 
-def test_dbt_task_pins_dbt_databricks_not_dbt_spark():
+def test_dbt_task_targets_workspace_gold_explicitly():
+    # The dbt_task type defaults catalog to the workspace default and
+    # schema to "default" when unset — publish_postgres reads Gold from
+    # gold_catalog=workspace.gold, so this must be explicit, not implied.
     tasks = _tasks_by_key(_load_job())
-    libraries = tasks["build_dbt_gold"].get("libraries", [])
-    packages = [lib["pypi"]["package"] for lib in libraries if "pypi" in lib]
-    assert any(pkg.startswith("dbt-databricks==") for pkg in packages)
-    assert not any("dbt-spark" in pkg for pkg in packages)
+    dbt_task = tasks["build_dbt_gold"]["dbt_task"]
+    assert dbt_task["catalog"] == "workspace"
+    assert dbt_task["schema"] == "gold"
+
+
+def test_dbt_task_pins_dbt_databricks_not_dbt_spark():
+    # A serverless task's own `libraries` field is rejected at submit
+    # time ("Libraries field is not supported for serverless task,
+    # please specify libraries in environment" — confirmed via a real
+    # one-time run), so the pin must live in the task's environment's
+    # dependencies instead, not a task-level `libraries: [...]` entry.
+    job = _load_job()
+    tasks = _tasks_by_key(job)
+    dbt_environment_key = tasks["build_dbt_gold"]["environment_key"]
+    environment = next(e for e in job["environments"] if e["environment_key"] == dbt_environment_key)
+    dependencies = environment["spec"]["dependencies"]
+    assert any(dep.startswith("dbt-databricks==") for dep in dependencies)
+    assert not any("dbt-spark" in dep for dep in dependencies)

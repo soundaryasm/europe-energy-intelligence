@@ -8,24 +8,24 @@ models:
     columns:
       - name: country_key
         description: Stable natural key (upper-cased ISO country code).
-        tests:
+        data_tests:
           - unique
           - not_null
       - name: country_code
-        tests:
+        data_tests:
           - unique
           - not_null
       - name: country_name
-        tests:
+        data_tests:
           - not_null
       - name: reference_location
-        tests:
+        data_tests:
           - not_null
       - name: timezone
-        tests:
+        data_tests:
           - not_null
       - name: entsoe_domain
-        tests:
+        data_tests:
           - not_null
 
   - name: dim_date
@@ -36,11 +36,11 @@ models:
     columns:
       - name: date_key
         description: Deterministic yyyyMMdd integer key.
-        tests:
+        data_tests:
           - unique
           - not_null
       - name: date
-        tests:
+        data_tests:
           - unique
           - not_null
 
@@ -52,28 +52,28 @@ models:
       constrained here.
     columns:
       - name: country_key
-        tests:
+        data_tests:
           - not_null
           - relationships:
               to: ref('dim_country')
               field: country_key
       - name: date_key
-        tests:
+        data_tests:
           - not_null
           - relationships:
               to: ref('dim_date')
               field: date_key
       - name: daily_demand_mwh
-        tests:
+        data_tests:
           - dbt_utils.accepted_range:
               min_value: 0
       - name: total_generation_mwh
-        tests:
+        data_tests:
           - dbt_utils.accepted_range:
               min_value: 0
       - name: renewable_generation_pct
         description: NULL on days with no generation data, never a fabricated 0.
-        tests:
+        data_tests:
           - dbt_utils.accepted_range:
               min_value: 0
               max_value: 100
@@ -83,25 +83,25 @@ models:
           Annual World Bank population for this country/year, repeated
           across every day of that year. NULL for a year World Bank has
           not published yet (e.g. the current year) — not an error.
-        tests:
+        data_tests:
           - dbt_utils.accepted_range:
               min_value: 0
       - name: gdp_constant_2015_usd
-        tests:
+        data_tests:
           - dbt_utils.accepted_range:
               min_value: 0
       - name: urban_population_pct
-        tests:
+        data_tests:
           - dbt_utils.accepted_range:
               min_value: 0
               max_value: 100
               inclusive: true
       - name: demand_kwh_per_capita
         description: NULL whenever demand or population for that country/year is unknown, never a fabricated 0.
-        tests:
+        data_tests:
           - dbt_utils.accepted_range:
               min_value: 0
-    tests:
+    data_tests:
       - dbt_utils.unique_combination_of_columns:
           combination_of_columns:
             - country_key
@@ -112,26 +112,26 @@ models:
       Daily weather aggregates per country (Spec 004). Grain: country + date.
     columns:
       - name: country_key
-        tests:
+        data_tests:
           - not_null
           - relationships:
               to: ref('dim_country')
               field: country_key
       - name: date_key
-        tests:
+        data_tests:
           - not_null
           - relationships:
               to: ref('dim_date')
               field: date_key
       - name: avg_wind_speed_kmh
-        tests:
+        data_tests:
           - dbt_utils.accepted_range:
               min_value: 0
       - name: solar_radiation_mj_m2
-        tests:
+        data_tests:
           - dbt_utils.accepted_range:
               min_value: 0
-    tests:
+    data_tests:
       - dbt_utils.unique_combination_of_columns:
           combination_of_columns:
             - country_key
@@ -143,34 +143,34 @@ models:
       Grain: country + date + production_type.
     columns:
       - name: country_key
-        tests:
+        data_tests:
           - not_null
           - relationships:
               to: ref('dim_country')
               field: country_key
       - name: date_key
-        tests:
+        data_tests:
           - not_null
           - relationships:
               to: ref('dim_date')
               field: date_key
       - name: production_type
-        tests:
+        data_tests:
           - not_null
       - name: generation_mwh
-        tests:
+        data_tests:
           - dbt_utils.accepted_range:
               min_value: 0
       - name: renewable_flag
-        tests:
+        data_tests:
           - not_null
       - name: generation_share_pct
-        tests:
+        data_tests:
           - dbt_utils.accepted_range:
               min_value: 0
               max_value: 100
               inclusive: true
-    tests:
+    data_tests:
       - dbt_utils.unique_combination_of_columns:
           combination_of_columns:
             - country_key

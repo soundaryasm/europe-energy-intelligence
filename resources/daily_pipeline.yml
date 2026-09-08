@@ -20,11 +20,18 @@ resources:
     europe_energy_intelligence_daily:
       name: "European Energy Intelligence - Daily Pipeline"
 
-      # Spec 006: run once daily at 02:00 Europe/Dublin, timezone
-      # explicit so this does not depend on any local machine's clock.
+      # Run once daily at 02:00 UTC, by explicit choice (2026-09-08) —
+      # every pipeline in this project uses UTC, not local time, even
+      # though this one previously used Europe/Dublin deliberately so
+      # it always fired "2 hours after local midnight" for Silver's
+      # local-calendar-date grain. Trade-off accepted: with fixed UTC,
+      # that local alignment now drifts by an hour between Irish DST
+      # and standard time (02:00 UTC = 03:00 Dublin in summer, 02:00
+      # Dublin in winter) instead of staying fixed at 2 hours past
+      # local midnight year-round.
       schedule:
         quartz_cron_expression: "0 0 2 * * ?"
-        timezone_id: "Europe/Dublin"
+        timezone_id: "UTC"
         pause_status: UNPAUSED
 
       # A scheduled run always uses execution_mode=daily (Spec 006: "The
@@ -56,6 +63,19 @@ resources:
             environment_version: "5"
             dependencies:
               - -r ${workspace.file_path}/requirements.txt
+        # Separate from python_notebook_env rather than adding
+        # dbt-databricks to the shared one: it pulls in its own large
+        # dependency set (dbt-core, jinja2, etc.) that only build_dbt_gold
+        # needs, and a serverless task's `libraries` field is rejected at
+        # submit time ("Libraries field is not supported for serverless
+        # task, please specify libraries in environment") — confirmed via
+        # a real one-time run — so this can't just be a task-level
+        # `libraries: [...]` entry either.
+        - environment_key: dbt_env
+          spec:
+            environment_version: "5"
+            dependencies:
+              - dbt-databricks==1.8.5
 
       tasks:
         - task_key: ingest_open_meteo
@@ -121,13 +141,17 @@ resources:
 
         # dbt must not run until Silver succeeds.
         - task_key: build_dbt_gold
-          environment_key: python_notebook_env
+          environment_key: dbt_env
           depends_on:
             - task_key: transform_silver
           dbt_task:
             project_directory: "${workspace.file_path}/dbt"
-            # Spec 004: dbt-databricks only, pinned explicitly here (not
-            # via the repo's shared requirements.txt), never dbt-spark.
+            # Explicit, not left to default: the dbt_task type defaults
+            # catalog to the workspace default and schema to `default`
+            # when unset — Gold must land in workspace.gold specifically,
+            # since publish_postgres reads from gold_catalog=workspace.gold.
+            catalog: "workspace"
+            schema: "gold"
             commands:
               - "dbt deps"
               - "dbt seed"
@@ -137,9 +161,6 @@ resources:
           timeout_seconds: 3600
           max_retries: 1
           min_retry_interval_millis: 300000
-          libraries:
-            - pypi:
-                package: "dbt-databricks==1.8.5" # pin/confirm against the target Databricks Runtime before first deploy
 
         # Spec 007 data-quality gate: publish only runs if dbt (and its
         # tests) succeeded — a failed/known-invalid Gold build never
