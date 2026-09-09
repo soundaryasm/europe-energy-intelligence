@@ -4,6 +4,8 @@ The Databricks/PySpark write path and the HTTP fetch are both external
 systems, so they are replaced with `unittest.mock` doubles here. These
 tests never touch the network, Spark, or Databricks.
 """
+import threading
+import time
 from datetime import date
 from unittest.mock import MagicMock
 
@@ -187,3 +189,71 @@ def test_run_ingestion_is_idempotent_across_reruns():
     first_keys = sorted(business_key(r) for r in first_records)
     second_keys = sorted(business_key(r) for r in second_records)
     assert first_keys == second_keys  # reruns produce the same logical records
+
+
+def test_run_ingestion_stops_new_requests_once_breaker_trips():
+    countries = [
+        CountryConfig("F1", "Fail1", "X", 0.0, 0.0, "UTC"),
+        CountryConfig("F2", "Fail2", "X", 0.0, 0.0, "UTC"),
+        CountryConfig("F3", "Fail3", "X", 0.0, 0.0, "UTC"),
+        CountryConfig("S4", "Skip4", "X", 0.0, 0.0, "UTC"),
+        CountryConfig("S5", "Skip5", "X", 0.0, 0.0, "UTC"),
+    ]
+
+    def _fetch(request, **_):
+        if request.country_code in ("F1", "F2", "F3"):
+            raise OpenMeteoAPIError("down")
+        return _payload_for(request.country_code)  # would succeed if actually attempted
+
+    fetch_fn = MagicMock(side_effect=_fetch)
+
+    result = run_ingestion(
+        date(2024, 1, 1), date(2024, 1, 1),
+        spark=MagicMock(), countries=countries, fetch_fn=fetch_fn,
+        spark_writer=MagicMock(return_value=0), max_workers=1, circuit_breaker_threshold=3,
+    )
+
+    assert fetch_fn.call_count == 3  # F1, F2, F3 only — S4/S5 skipped, breaker already open
+    assert set(result.countries_failed) == {"F1", "F2", "F3", "S4", "S5"}
+    assert "circuit breaker" in result.errors["S4"].lower()
+
+
+def test_run_ingestion_does_not_trip_breaker_on_a_single_countrys_failure():
+    def _fetch(request, **_):
+        if request.country_code == "IE":
+            raise OpenMeteoAPIError("IE-specific issue")
+        return _payload_for(request.country_code)
+
+    result = run_ingestion(
+        date(2024, 1, 1), date(2024, 1, 1),
+        spark=MagicMock(), countries=[IRELAND, GERMANY], fetch_fn=_fetch,
+        spark_writer=MagicMock(return_value=0), circuit_breaker_threshold=3,
+    )
+
+    assert result.countries_failed == ["IE"]
+    assert result.countries_succeeded == ["DE"]
+    assert "circuit breaker" not in result.errors["IE"].lower()
+
+
+def test_run_ingestion_processes_countries_concurrently():
+    lock = threading.Lock()
+    state = {"current": 0, "max_seen": 0}
+
+    def fetch_fn(request, **_):
+        with lock:
+            state["current"] += 1
+            state["max_seen"] = max(state["max_seen"], state["current"])
+        time.sleep(0.05)
+        with lock:
+            state["current"] -= 1
+        return _payload_for(request.country_code)
+
+    countries = [CountryConfig(f"C{i}", f"Country{i}", "X", 0.0, 0.0, "UTC") for i in range(5)]
+
+    run_ingestion(
+        date(2024, 1, 1), date(2024, 1, 1),
+        spark=MagicMock(), countries=countries, fetch_fn=fetch_fn,
+        spark_writer=MagicMock(return_value=0), max_workers=5,
+    )
+
+    assert 1 < state["max_seen"] <= 5

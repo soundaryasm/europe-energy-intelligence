@@ -51,6 +51,8 @@ resources:
               # numeric ID at run time — needed so the notebook can
               # pause its own schedule once the backfill is complete.
               job_id: "{{job.id}}"
+              # See the notebook's own sys.path bootstrap comment for why.
+              bundle_root: "${workspace.file_path}"
           timeout_seconds: 5400
           # A month left partially covered is expected to be retried by
           # the *next scheduled run* of this same job (the checkpoint

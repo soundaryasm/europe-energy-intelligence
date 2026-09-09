@@ -5,6 +5,8 @@ mocked. XML parsing and Bronze record construction run for real inside
 `run_ingestion`, fed by fixture XML text returned from the mocked fetch —
 this exercises the real business logic, not a stand-in for it.
 """
+import threading
+import time
 from datetime import date, datetime, timezone
 from unittest.mock import MagicMock
 
@@ -14,8 +16,14 @@ from src.config.countries import CountryConfig
 from src.config.entsoe import EntsoeCountryDomain
 from src.ingestion.entsoe_client import EntsoeAPIError, EntsoeNoDataError
 from src.ingestion.entsoe_datasets import GENERATION, LOAD, PRICE
-from src.ingestion.entsoe_pipeline import _filter_points_within_window, resolve_country_domains, run_ingestion
+from src.ingestion.entsoe_pipeline import (
+    _filter_points_within_window,
+    _process_country,
+    resolve_country_domains,
+    run_ingestion,
+)
 from src.config.entsoe import EntsoeConfigError
+from src.orchestration.circuit_breaker import CircuitBreaker
 from tests.fixtures_entsoe_xml import GENERATION_XML, LOAD_XML, PRICE_XML
 
 IRELAND = CountryConfig("IE", "Ireland", "Dublin", 53.3498, -6.2603, "Europe/Dublin")
@@ -273,3 +281,102 @@ def test_run_ingestion_trims_dataset_response_to_the_requested_window():
     # window's (identical, mocked) response gets fully filtered out.
     assert len(written_records) == 2
     assert all(r["source_timestamp"] == "2024-01-01T00:00:00Z" for r in written_records)
+
+
+def test_process_country_skips_all_datasets_when_breaker_already_open():
+    breaker = CircuitBreaker(distinct_failure_threshold=3)
+    breaker.record_failure("XX")
+    breaker.record_failure("YY")
+    breaker.record_failure("ZZ")
+    fetch_fn = MagicMock(side_effect=lambda request, **_: XML_BY_DATASET[request.dataset.name])
+
+    result = _process_country(
+        IE_DOMAIN, DATASETS, windows=[(date(2024, 1, 1), date(2024, 1, 1))],
+        token="tok", timeout=30, max_retries=3, breaker=breaker, fetch_fn=fetch_fn,
+        start_date=date(2024, 1, 1), end_date=date(2024, 1, 1),
+    )
+
+    fetch_fn.assert_not_called()  # never even attempted — breaker was already open
+    assert result.succeeded == []
+    assert set(result.failed) == {"IE:load", "IE:generation", "IE:price"}
+    assert all("circuit breaker" in msg.lower() for msg in result.errors.values())
+
+
+def test_run_ingestion_stops_new_requests_once_breaker_trips():
+    # max_workers=1 forces strictly sequential, submission-order
+    # processing — deterministic, no real-concurrency timing to fight.
+    countries = [
+        CountryConfig("F1", "Fail1", "X", 0.0, 0.0, "UTC"),
+        CountryConfig("F2", "Fail2", "X", 0.0, 0.0, "UTC"),
+        CountryConfig("F3", "Fail3", "X", 0.0, 0.0, "UTC"),
+        CountryConfig("S4", "Skip4", "X", 0.0, 0.0, "UTC"),
+        CountryConfig("S5", "Skip5", "X", 0.0, 0.0, "UTC"),
+    ]
+    domains = {c.country_code: EntsoeCountryDomain(c.country_code, "10Y-TEST", validated=False) for c in countries}
+
+    def _fetch(request, **_):
+        if request.country_code in ("F1", "F2", "F3"):
+            raise EntsoeAPIError("down")
+        return LOAD_XML  # S4/S5 would succeed if actually attempted
+
+    fetch_fn = MagicMock(side_effect=_fetch)
+
+    result = run_ingestion(
+        date(2024, 1, 1), date(2024, 1, 1),
+        token="tok", countries=countries, domains=domains, datasets=(LOAD,),
+        fetch_fn=fetch_fn, spark_writer=MagicMock(return_value=0),
+        max_workers=1, circuit_breaker_threshold=3,
+    )
+
+    assert fetch_fn.call_count == 3  # F1, F2, F3 only — S4/S5 skipped, breaker already open
+    assert set(result.failed) == {"F1:load", "F2:load", "F3:load", "S4:load", "S5:load"}
+    assert result.succeeded == []
+    assert "circuit breaker" in result.errors["S4:load"].lower()
+
+
+def test_run_ingestion_does_not_trip_breaker_on_one_countrys_repeated_failures():
+    # One country failing all 3 of its datasets must not block a
+    # different, healthy country — the real incident (Ireland) this
+    # breadth-based design exists to get right.
+    def fetch_fn(request, **_):
+        if request.country_code == "IE":
+            raise EntsoeAPIError("IE-specific issue")
+        return XML_BY_DATASET[request.dataset.name]
+
+    result = run_ingestion(
+        date(2024, 1, 1), date(2024, 1, 1),
+        token="tok", countries=[IRELAND, GERMANY], domains={"IE": IE_DOMAIN, "DE": DE_DOMAIN},
+        datasets=DATASETS, fetch_fn=fetch_fn, spark_writer=MagicMock(return_value=0),
+        circuit_breaker_threshold=3,
+    )
+
+    assert set(result.failed) == {"IE:load", "IE:generation", "IE:price"}
+    assert set(result.succeeded) == {"DE:load", "DE:generation", "DE:price"}
+    assert not any("circuit breaker" in msg.lower() for msg in result.errors.values())
+
+
+def test_run_ingestion_processes_countries_concurrently():
+    lock = threading.Lock()
+    state = {"current": 0, "max_seen": 0}
+
+    def fetch_fn(request, **_):
+        with lock:
+            state["current"] += 1
+            state["max_seen"] = max(state["max_seen"], state["current"])
+        time.sleep(0.05)
+        with lock:
+            state["current"] -= 1
+        return LOAD_XML
+
+    countries = [
+        CountryConfig(f"C{i}", f"Country{i}", "X", 0.0, 0.0, "UTC") for i in range(5)
+    ]
+    domains = {c.country_code: EntsoeCountryDomain(c.country_code, "10Y-TEST", validated=False) for c in countries}
+
+    run_ingestion(
+        date(2024, 1, 1), date(2024, 1, 1),
+        token="tok", countries=countries, domains=domains, datasets=(LOAD,),
+        fetch_fn=fetch_fn, spark_writer=MagicMock(return_value=0), max_workers=5,
+    )
+
+    assert 1 < state["max_seen"] <= 5  # genuine overlap, never more than max_workers

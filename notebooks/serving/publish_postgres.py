@@ -13,6 +13,22 @@
 
 # COMMAND ----------
 
+# Bundle deployments run this notebook from a plain Workspace Files
+# location, not a Databricks Repo — which does not add the repo root to
+# sys.path automatically the way a Repo clone does. Confirmed via a
+# real deployed run failing with `ModuleNotFoundError: No module named
+# 'src'` (2026-09-09) despite the identical code working fine from a
+# Repos-synced folder. Must run before any `from src...` import below.
+dbutils.widgets.text("bundle_root", "", "Workspace root to add to sys.path (bundle deployments)")
+
+import sys
+
+_bundle_root = dbutils.widgets.get("bundle_root")
+if _bundle_root and _bundle_root not in sys.path:
+    sys.path.insert(0, _bundle_root)
+
+# COMMAND ----------
+
 import os
 
 from src.serving.postgres_connection import connect, load_connection_config_from_env

@@ -9,10 +9,23 @@ XML parsing (`entsoe_xml.parse_time_series`) and Bronze row construction
 (`entsoe_bronze.build_bronze_records`) are real business logic and are
 exercised for real in this module and in its tests — only the HTTP layer
 and the Spark write are treated as external systems to mock in tests.
+
+Countries are processed by a bounded thread pool, one worker per
+country (each worker still runs its own datasets/windows sequentially) —
+not because ENTSO-E's documented 400 req/min rate limit is at risk
+(sequential single-threaded calls never come close to it), but because a
+degraded/unresponsive upstream turns each already-bounded (3-attempt)
+HTTP retry into a real ~96s wall-clock cost, and 15 of those fully
+sequential is what actually made this slow in production. A shared
+`CircuitBreaker` stops issuing new requests once enough *distinct*
+countries have failed to indicate a platform-wide outage rather than a
+handful of country-specific issues (see `circuit_breaker.py`'s docstring
+for the real incident this distinction protects against).
 """
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Callable, Dict, List, Optional, Sequence
@@ -32,10 +45,22 @@ from src.ingestion.entsoe_client import (
 )
 from src.ingestion.entsoe_datasets import ALL_DATASETS, EntsoeDataset
 from src.ingestion.entsoe_xml import parse_time_series
+from src.orchestration.circuit_breaker import CircuitBreaker
 
 logger = logging.getLogger(__name__)
 
 BRONZE_TABLE_NAME = "bronze_entsoe_energy"
+
+# One worker per country, bounded — see module docstring for why this
+# number, not full 15-way concurrency: it caps in-flight requests well
+# under even 70% of ENTSO-E's documented 400 req/min limit while still
+# avoiding ever bursting all 15 countries at once.
+DEFAULT_MAX_WORKERS = 5
+
+# Distinct countries failing before the circuit breaker stops issuing
+# new requests. See `circuit_breaker.py` for why this counts distinct
+# countries, not raw failed-request count.
+DEFAULT_CIRCUIT_BREAKER_THRESHOLD = 3
 
 
 @dataclass
@@ -48,7 +73,8 @@ class IngestionResult:
     `unavailable` means ENTSO-E acknowledged the request but reported no
     matching data for that country/dataset/period — a legitimate source
     condition, not a broken ingestion run. `failed` means a genuine
-    technical/invalid-response failure. Only `failed` affects
+    technical/invalid-response failure, including a unit of work skipped
+    because the circuit breaker opened. Only `failed` affects
     `all_succeeded`, so a run with legitimately unavailable sources does
     not get treated as a failed run.
     """
@@ -68,6 +94,22 @@ class IngestionResult:
     @property
     def all_succeeded(self) -> bool:
         return not self.failed
+
+
+@dataclass
+class _CountryResult:
+    """One country's outcome, returned by a worker thread and merged
+    into the shared `IngestionResult` only by the main thread — workers
+    never touch shared mutable state directly.
+    """
+
+    country_code: str
+    datasets_seen: List[str] = field(default_factory=list)
+    succeeded: List[str] = field(default_factory=list)
+    unavailable: List[str] = field(default_factory=list)
+    failed: List[str] = field(default_factory=list)
+    errors: Dict[str, str] = field(default_factory=dict)
+    records: List[dict] = field(default_factory=list)
 
 
 def _filter_points_within_window(parsed_points: List[dict], window_start: date, window_end: date) -> List[dict]:
@@ -157,6 +199,97 @@ def _default_spark_writer(spark, records: List[dict], table_name: str) -> int:
     )
 
 
+def _process_country(
+    country_domain: EntsoeCountryDomain,
+    datasets: Sequence[EntsoeDataset],
+    windows: Sequence,
+    *,
+    token: str,
+    timeout: float,
+    max_retries: int,
+    breaker: CircuitBreaker,
+    fetch_fn: Callable[..., str],
+    start_date: date,
+    end_date: date,
+) -> _CountryResult:
+    """Process every dataset/window for one country, sequentially.
+
+    Runs on a worker thread. Returns its own result rather than mutating
+    any shared state — the caller merges results after collection, from
+    the main thread only.
+    """
+    result = _CountryResult(country_code=country_domain.country_code)
+
+    for dataset in datasets:
+        attempt_key = f"{country_domain.country_code}:{dataset.name}"
+        result.datasets_seen.append(dataset.name)
+
+        if breaker.is_open():
+            result.failed.append(attempt_key)
+            result.errors[attempt_key] = (
+                f"Skipped: circuit breaker open (distinct failed countries: "
+                f"{sorted(breaker.failed_identifiers)})"
+            )
+            continue
+
+        try:
+            dataset_records: List[dict] = []
+            saw_no_data = False
+            for window_start, window_end in windows:
+                try:
+                    xml_text = fetch_fn(
+                        EntsoeRequest(
+                            country_code=country_domain.country_code,
+                            domain=country_domain.domain,
+                            dataset=dataset,
+                            period_start=window_start,
+                            period_end=window_end,
+                        ),
+                        token=token,
+                        timeout=timeout,
+                        max_retries=max_retries,
+                    )
+                except EntsoeNoDataError as exc:
+                    saw_no_data = True
+                    logger.info(
+                        "ENTSO-E reported no data for %s (%s to %s): %s",
+                        attempt_key, window_start, window_end, exc,
+                    )
+                    continue
+
+                parsed_points = parse_time_series(xml_text, dataset)
+                parsed_points = _filter_points_within_window(parsed_points, window_start, window_end)
+                dataset_records.extend(
+                    build_bronze_records(
+                        parsed_points, country_domain, dataset, window_start, window_end
+                    )
+                )
+
+            if dataset_records:
+                result.records.extend(dataset_records)
+                result.succeeded.append(attempt_key)
+            elif saw_no_data:
+                result.unavailable.append(attempt_key)
+            else:
+                # No window produced records, and none explicitly said
+                # "no data" either — still a failure, not a silent
+                # empty success (Spec 002 "API Behaviour").
+                raise EntsoeAPIError(
+                    f"ENTSO-E returned no records for {country_domain.country_code}/"
+                    f"{dataset.name} between {start_date} and {end_date}."
+                )
+        except Exception as exc:  # noqa: BLE001 - a per-pair failure must stay visible
+            logger.error("ENTSO-E ingestion failed for %s: %s", attempt_key, exc)
+            result.failed.append(attempt_key)
+            result.errors[attempt_key] = str(exc)
+            # A genuine no-data acknowledgement is not evidence of an
+            # outage and must never feed the breaker — only real
+            # technical failures (this branch) do.
+            breaker.record_failure(country_domain.country_code)
+
+    return result
+
+
 def run_ingestion(
     start_date: date,
     end_date: date,
@@ -172,13 +305,17 @@ def run_ingestion(
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     max_retries: int = DEFAULT_MAX_RETRIES,
     chunk_days: int = DEFAULT_CHUNK_DAYS,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+    circuit_breaker_threshold: int = DEFAULT_CIRCUIT_BREAKER_THRESHOLD,
 ) -> IngestionResult:
     """Ingest ENTSO-E Bronze data for every configured country and dataset.
 
-    Each (country, dataset) pair is processed independently: one failure
-    is recorded and logged but does not stop the others (Spec 002
-    "A failed country/dataset request must not be silently ignored.").
-    Large date ranges are split into bounded chunks per `chunk_days`.
+    Countries are processed concurrently by a bounded thread pool
+    (`max_workers`); each country's own datasets/windows still run
+    sequentially within its worker. One country's failure is recorded
+    and logged but does not stop the others (Spec 002 "A failed
+    country/dataset request must not be silently ignored."). Large date
+    ranges are split into bounded chunks per `chunk_days`.
 
     A per-window `EntsoeNoDataError` (ENTSO-E acknowledging "no matching
     data" for that window) does not abort the (country, dataset) attempt
@@ -186,7 +323,10 @@ def run_ingestion(
     no data, the pair is classified `unavailable`, not `failed`, and no
     rows are written for it (never a synthesized zero — Spec 002
     "Do not manufacture observations for missing intervals"). Any other
-    exception aborts the attempt and is classified `failed`.
+    exception aborts the attempt and is classified `failed`, and counts
+    toward the shared circuit breaker (`circuit_breaker_threshold`
+    distinct countries failing stops any further new requests for the
+    rest of this run — see `circuit_breaker.py`).
     """
     if start_date > end_date:
         raise ValueError("start_date must not be after end_date")
@@ -204,66 +344,30 @@ def run_ingestion(
     country_domains = resolve_country_domains(resolved_countries, resolved_domains)
     windows = chunk_date_range(start_date, end_date, chunk_days=chunk_days)
 
+    breaker = CircuitBreaker(distinct_failure_threshold=circuit_breaker_threshold)
     all_records: List[dict] = []
 
-    for country_domain in country_domains:
-        result.countries_attempted.append(country_domain.country_code)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(
+                _process_country, country_domain, datasets, windows,
+                token=token, timeout=timeout, max_retries=max_retries,
+                breaker=breaker, fetch_fn=fetch_fn, start_date=start_date, end_date=end_date,
+            )
+            for country_domain in country_domains
+        ]
 
-        for dataset in datasets:
-            if dataset.name not in result.datasets_attempted:
-                result.datasets_attempted.append(dataset.name)
-
-            attempt_key = f"{country_domain.country_code}:{dataset.name}"
-            try:
-                dataset_records: List[dict] = []
-                saw_no_data = False
-                for window_start, window_end in windows:
-                    try:
-                        xml_text = fetch_fn(
-                            EntsoeRequest(
-                                country_code=country_domain.country_code,
-                                domain=country_domain.domain,
-                                dataset=dataset,
-                                period_start=window_start,
-                                period_end=window_end,
-                            ),
-                            token=token,
-                            timeout=timeout,
-                            max_retries=max_retries,
-                        )
-                    except EntsoeNoDataError as exc:
-                        saw_no_data = True
-                        logger.info(
-                            "ENTSO-E reported no data for %s (%s to %s): %s",
-                            attempt_key, window_start, window_end, exc,
-                        )
-                        continue
-
-                    parsed_points = parse_time_series(xml_text, dataset)
-                    parsed_points = _filter_points_within_window(parsed_points, window_start, window_end)
-                    dataset_records.extend(
-                        build_bronze_records(
-                            parsed_points, country_domain, dataset, window_start, window_end
-                        )
-                    )
-
-                if dataset_records:
-                    all_records.extend(dataset_records)
-                    result.succeeded.append(attempt_key)
-                elif saw_no_data:
-                    result.unavailable.append(attempt_key)
-                else:
-                    # No window produced records, and none explicitly said
-                    # "no data" either — still a failure, not a silent
-                    # empty success (Spec 002 "API Behaviour").
-                    raise EntsoeAPIError(
-                        f"ENTSO-E returned no records for {country_domain.country_code}/"
-                        f"{dataset.name} between {start_date} and {end_date}."
-                    )
-            except Exception as exc:  # noqa: BLE001 - a per-pair failure must stay visible
-                logger.error("ENTSO-E ingestion failed for %s: %s", attempt_key, exc)
-                result.failed.append(attempt_key)
-                result.errors[attempt_key] = str(exc)
+        for future in as_completed(futures):
+            country_result = future.result()
+            result.countries_attempted.append(country_result.country_code)
+            for name in country_result.datasets_seen:
+                if name not in result.datasets_attempted:
+                    result.datasets_attempted.append(name)
+            result.succeeded.extend(country_result.succeeded)
+            result.unavailable.extend(country_result.unavailable)
+            result.failed.extend(country_result.failed)
+            result.errors.update(country_result.errors)
+            all_records.extend(country_result.records)
 
     if all_records:
         result.records_written = spark_writer(spark, all_records, table_name)

@@ -87,6 +87,8 @@ resources:
               start_date: "{{job.parameters.start_date}}"
               end_date: "{{job.parameters.end_date}}"
               lookback_days: "{{job.parameters.lookback_days}}"
+              # See the notebook's own sys.path bootstrap comment for why.
+              bundle_root: "${workspace.file_path}"
           timeout_seconds: 3600
           max_retries: 2
           min_retry_interval_millis: 300000 # 5 minutes
@@ -103,6 +105,7 @@ resources:
               lookback_days: "{{job.parameters.lookback_days}}"
               secret_scope: "${var.entsoe_secret_scope}"
               secret_key: "ENTSOE_API_TOKEN"
+              bundle_root: "${workspace.file_path}"
           timeout_seconds: 3600
           max_retries: 2
           min_retry_interval_millis: 300000
@@ -121,6 +124,8 @@ resources:
           environment_key: python_notebook_env
           notebook_task:
             notebook_path: "${workspace.file_path}/notebooks/ingestion/worldbank_ingestion"
+            base_parameters:
+              bundle_root: "${workspace.file_path}"
           timeout_seconds: 1800
           max_retries: 2
           min_retry_interval_millis: 300000
@@ -135,6 +140,8 @@ resources:
             - task_key: ingest_entsoe
           notebook_task:
             notebook_path: "${workspace.file_path}/notebooks/transformations/transform_silver"
+            base_parameters:
+              bundle_root: "${workspace.file_path}"
           timeout_seconds: 3600
           max_retries: 1
           min_retry_interval_millis: 300000
@@ -174,6 +181,7 @@ resources:
             base_parameters:
               gold_catalog: "workspace.gold" # matches the validated Gold location (Unity Catalog "workspace" catalog, "gold" schema)
               secret_scope: "${var.postgres_secret_scope}"
+              bundle_root: "${workspace.file_path}"
           timeout_seconds: 1800
           max_retries: 2
           min_retry_interval_millis: 300000

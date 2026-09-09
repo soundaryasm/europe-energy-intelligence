@@ -6,10 +6,18 @@ body, so that the orchestration and business logic in this module stay
 importable and unit-testable without a PySpark installation and without
 touching any external system. Callers on Databricks pass the active
 `spark` session; tests inject a mock `spark_writer` instead.
+
+Countries are processed by the same bounded-thread-pool +
+breadth-based-circuit-breaker pattern as `entsoe_pipeline.py` (see that
+module's docstring and `circuit_breaker.py` for the reasoning) — reused
+here for consistency, not because Open-Meteo has shown ENTSO-E's kind of
+instability. Each worker does exactly one fetch (no per-country
+dataset/window sub-loop the way ENTSO-E has).
 """
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone as dt_timezone
 from typing import Callable, Dict, List, Optional, Tuple
@@ -25,6 +33,7 @@ from src.ingestion.open_meteo_client import (
     SOURCE_ENDPOINT,
     fetch_weather,
 )
+from src.orchestration.circuit_breaker import CircuitBreaker
 from src.orchestration.processing_window import latest_completed_date
 
 logger = logging.getLogger(__name__)
@@ -32,6 +41,8 @@ logger = logging.getLogger(__name__)
 BRONZE_TABLE_NAME = "bronze_open_meteo_weather"
 DEFAULT_BACKFILL_MONTHS = 24
 _DAYS_PER_MONTH_APPROX = 30
+DEFAULT_MAX_WORKERS = 5
+DEFAULT_CIRCUIT_BREAKER_THRESHOLD = 3
 
 
 @dataclass
@@ -124,6 +135,66 @@ def _default_spark_writer(spark, records: List[dict], table_name: str) -> int:
     )
 
 
+@dataclass
+class _CountryOutcome:
+    """One country's outcome, returned by a worker thread and merged
+    into the shared `IngestionResult` only by the main thread.
+    """
+
+    country_code: str
+    succeeded: bool
+    error: Optional[str] = None
+    records: List[dict] = field(default_factory=list)
+
+
+def _fetch_country(
+    country: CountryConfig,
+    *,
+    start_date: date,
+    end_date: date,
+    endpoint_url: str,
+    source_endpoint_label: str,
+    timeout: float,
+    max_retries: int,
+    breaker: CircuitBreaker,
+    fetch_fn: Callable[..., dict],
+) -> _CountryOutcome:
+    """Fetch and build Bronze records for one country. Runs on a worker
+    thread; returns its own result rather than mutating shared state.
+    """
+    if breaker.is_open():
+        return _CountryOutcome(
+            country.country_code, succeeded=False,
+            error=f"Skipped: circuit breaker open (distinct failed countries: {sorted(breaker.failed_identifiers)})",
+        )
+
+    try:
+        payload = fetch_fn(
+            OpenMeteoRequest(
+                country_code=country.country_code,
+                latitude=country.latitude,
+                longitude=country.longitude,
+                timezone=country.timezone,
+                start_date=start_date,
+                end_date=end_date,
+            ),
+            endpoint_url=endpoint_url,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+        records = build_bronze_records(payload, country, source_endpoint=source_endpoint_label)
+        if not records:
+            raise OpenMeteoAPIError(
+                f"Open-Meteo returned no records for {country.country_code} "
+                f"between {start_date} and {end_date}."
+            )
+        return _CountryOutcome(country.country_code, succeeded=True, records=records)
+    except Exception as exc:  # noqa: BLE001 - a per-country failure must stay visible
+        logger.error("Open-Meteo ingestion failed for %s: %s", country.country_code, exc)
+        breaker.record_failure(country.country_code)
+        return _CountryOutcome(country.country_code, succeeded=False, error=str(exc))
+
+
 def run_ingestion(
     start_date: date,
     end_date: date,
@@ -137,6 +208,8 @@ def run_ingestion(
     spark_writer: Callable[[object, List[dict], str], int] = _default_spark_writer,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     max_retries: int = DEFAULT_MAX_RETRIES,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+    circuit_breaker_threshold: int = DEFAULT_CIRCUIT_BREAKER_THRESHOLD,
 ) -> IngestionResult:
     """Ingest Open-Meteo Bronze weather data for every configured country.
 
@@ -147,10 +220,13 @@ def run_ingestion(
     — see `open_meteo_client` for why the two APIs aren't interchangeable
     for recent dates.
 
-    Countries are processed independently: one country's failure is
-    recorded in the result and logged, but does not stop the others from
-    being ingested. Failures are never silently ignored (Spec 001
-    "Observability" / "API Behaviour").
+    Countries are processed concurrently by a bounded thread pool
+    (`max_workers`); one country's failure is recorded in the result and
+    logged, but does not stop the others from being ingested. Failures
+    are never silently ignored (Spec 001 "Observability" / "API
+    Behaviour"). `circuit_breaker_threshold` distinct countries failing
+    stops any further new requests for the rest of this run (see
+    `circuit_breaker.py`).
     """
     if start_date > end_date:
         raise ValueError("start_date must not be after end_date")
@@ -162,36 +238,29 @@ def run_ingestion(
     )
 
     resolved_countries = countries if countries is not None else load_countries()
+    breaker = CircuitBreaker(distinct_failure_threshold=circuit_breaker_threshold)
     all_records: List[dict] = []
 
-    for country in resolved_countries:
-        result.countries_attempted.append(country.country_code)
-        try:
-            payload = fetch_fn(
-                OpenMeteoRequest(
-                    country_code=country.country_code,
-                    latitude=country.latitude,
-                    longitude=country.longitude,
-                    timezone=country.timezone,
-                    start_date=start_date,
-                    end_date=end_date,
-                ),
-                endpoint_url=endpoint_url,
-                timeout=timeout,
-                max_retries=max_retries,
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(
+                _fetch_country, country,
+                start_date=start_date, end_date=end_date,
+                endpoint_url=endpoint_url, source_endpoint_label=source_endpoint_label,
+                timeout=timeout, max_retries=max_retries, breaker=breaker, fetch_fn=fetch_fn,
             )
-            records = build_bronze_records(payload, country, source_endpoint=source_endpoint_label)
-            if not records:
-                raise OpenMeteoAPIError(
-                    f"Open-Meteo returned no records for {country.country_code} "
-                    f"between {start_date} and {end_date}."
-                )
-            all_records.extend(records)
-            result.countries_succeeded.append(country.country_code)
-        except Exception as exc:  # noqa: BLE001 - a per-country failure must stay visible
-            logger.error("Open-Meteo ingestion failed for %s: %s", country.country_code, exc)
-            result.countries_failed.append(country.country_code)
-            result.errors[country.country_code] = str(exc)
+            for country in resolved_countries
+        ]
+
+        for future in as_completed(futures):
+            outcome = future.result()
+            result.countries_attempted.append(outcome.country_code)
+            if outcome.succeeded:
+                result.countries_succeeded.append(outcome.country_code)
+                all_records.extend(outcome.records)
+            else:
+                result.countries_failed.append(outcome.country_code)
+                result.errors[outcome.country_code] = outcome.error
 
     if all_records:
         result.records_written = spark_writer(spark, all_records, table_name)

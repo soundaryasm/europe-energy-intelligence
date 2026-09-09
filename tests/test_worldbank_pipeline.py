@@ -3,6 +3,8 @@
 Only the HTTP fetch and the Spark write are external systems here and are
 mocked. Bronze record construction runs for real inside `run_ingestion`.
 """
+import threading
+import time
 from unittest.mock import MagicMock
 
 from src.config.countries import CountryConfig
@@ -109,3 +111,43 @@ def test_run_ingestion_passes_all_configured_country_codes_in_one_request():
     request = fetch_fn.call_args[0][0]
     assert list(request.country_codes) == ["IE", "DE"]
     assert request.year == 2026
+
+
+def test_run_ingestion_stops_new_requests_once_breaker_trips():
+    def _fetch(request, **_):
+        if request.indicator_code in ("A", "B", "C"):
+            raise WorldBankAPIError("down")
+        return _wb_records_for(request.indicator_code)  # would succeed if actually attempted
+
+    fetch_fn = MagicMock(side_effect=_fetch)
+
+    result = run_ingestion(
+        2026, spark=MagicMock(), countries=[IRELAND], fetch_fn=fetch_fn,
+        spark_writer=MagicMock(return_value=0), indicator_codes=("A", "B", "C", "D"),
+        max_workers=1, circuit_breaker_threshold=3,
+    )
+
+    assert fetch_fn.call_count == 3  # A, B, C only — D skipped, breaker already open
+    assert set(result.indicators_failed) == {"A", "B", "C", "D"}
+    assert "circuit breaker" in result.errors["D"].lower()
+
+
+def test_run_ingestion_processes_indicators_concurrently():
+    lock = threading.Lock()
+    state = {"current": 0, "max_seen": 0}
+
+    def fetch_fn(request, **_):
+        with lock:
+            state["current"] += 1
+            state["max_seen"] = max(state["max_seen"], state["current"])
+        time.sleep(0.05)
+        with lock:
+            state["current"] -= 1
+        return _wb_records_for(request.indicator_code)
+
+    run_ingestion(
+        2026, spark=MagicMock(), countries=[IRELAND], fetch_fn=fetch_fn,
+        spark_writer=MagicMock(return_value=0), indicator_codes=("A", "B", "C", "D"), max_workers=5,
+    )
+
+    assert 1 < state["max_seen"] <= 4
