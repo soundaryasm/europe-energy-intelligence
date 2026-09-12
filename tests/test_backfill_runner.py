@@ -12,10 +12,13 @@ from src.ingestion.entsoe_pipeline import IngestionResult as EntsoeIngestionResu
 from src.ingestion.open_meteo_pipeline import IngestionResult as OpenMeteoIngestionResult
 from src.ingestion.worldbank_pipeline import IngestionResult as WorldBankIngestionResult
 from src.orchestration.backfill_checkpoint import (
+    CheckpointEntry,
+    GIVE_UP_AFTER_ATTEMPTS,
     OPEN_METEO_DATASET,
     SOURCE_ENTSOE,
     SOURCE_OPEN_METEO,
     STATUS_FAILED,
+    STATUS_GIVEN_UP,
     STATUS_SUCCESS,
     STATUS_UNAVAILABLE,
 )
@@ -37,9 +40,9 @@ def test_expected_combos_covers_every_entsoe_dataset_plus_one_weather_row_per_co
 def test_determine_target_month_self_terminates_when_reader_reports_all_complete():
     def all_success_reader(spark, table_name):
         return {
-            (SOURCE_ENTSOE, "IE", ds, date(2015, 1, 1)): STATUS_SUCCESS
+            (SOURCE_ENTSOE, "IE", ds, date(2015, 1, 1)): CheckpointEntry(STATUS_SUCCESS, 1)
             for ds in ("load", "generation", "price")
-        } | {(SOURCE_OPEN_METEO, "IE", OPEN_METEO_DATASET, date(2015, 1, 1)): STATUS_SUCCESS}
+        } | {(SOURCE_OPEN_METEO, "IE", OPEN_METEO_DATASET, date(2015, 1, 1)): CheckpointEntry(STATUS_SUCCESS, 1)}
 
     target = determine_target_month(
         MagicMock(), [IRELAND], reference_date=date(2015, 2, 15), checkpoint_reader=all_success_reader,
@@ -151,6 +154,80 @@ def test_run_backfill_month_marks_partial_coverage_as_failed_not_success():
     assert all(status == STATUS_FAILED for status in result.combo_statuses.values())
 
 
+def test_run_backfill_month_escalates_to_given_up_after_threshold_attempts():
+    # A combo that has already failed GIVE_UP_AFTER_ATTEMPTS - 1 times
+    # before, and fails again now, must escalate to given_up rather than
+    # staying failed forever — the exact scenario that would otherwise
+    # block every older month indefinitely over one stuck combo.
+    previous_attempts = GIVE_UP_AFTER_ATTEMPTS - 1
+    existing = {
+        (SOURCE_ENTSOE, "IE", "generation", date(2026, 8, 1)): CheckpointEntry(STATUS_FAILED, previous_attempts),
+    }
+
+    result = run_backfill_month(
+        MagicMock(),
+        token="tok",
+        countries=[IRELAND],
+        reference_date=date(2026, 9, 8),
+        checkpoint_reader=lambda spark, table_name: existing,
+        checkpoint_writer=lambda spark, rows, table_name: len(rows),
+        entsoe_covered_dates_fn=lambda spark, cc, ds, table: (
+            frozenset() if ds == "generation" else frozenset(date(2026, 8, d) for d in range(1, 32))
+        ),
+        open_meteo_covered_dates_fn=lambda spark, cc, table: frozenset(date(2026, 8, d) for d in range(1, 32)),
+        entsoe_ingestion_fn=lambda *a, **k: _entsoe_result(),  # generation stays empty, not confirmed unavailable
+        open_meteo_ingestion_fn=lambda *a, **k: _open_meteo_result(),
+        worldbank_ingestion_fn=lambda *a, **k: _worldbank_result(),
+    )
+
+    assert result.combo_statuses[(SOURCE_ENTSOE, "IE", "generation")] == STATUS_GIVEN_UP
+    # Everything else (full coverage) still succeeds normally.
+    assert result.combo_statuses[(SOURCE_ENTSOE, "IE", "load")] == STATUS_SUCCESS
+
+
+def test_run_backfill_month_does_not_escalate_before_threshold():
+    existing = {
+        (SOURCE_ENTSOE, "IE", "generation", date(2026, 8, 1)): CheckpointEntry(STATUS_FAILED, 1),
+    }
+
+    result = run_backfill_month(
+        MagicMock(),
+        token="tok",
+        countries=[IRELAND],
+        reference_date=date(2026, 9, 8),
+        checkpoint_reader=lambda spark, table_name: existing,
+        checkpoint_writer=lambda spark, rows, table_name: len(rows),
+        entsoe_covered_dates_fn=lambda spark, cc, ds, table: (
+            frozenset() if ds == "generation" else frozenset(date(2026, 8, d) for d in range(1, 32))
+        ),
+        open_meteo_covered_dates_fn=lambda spark, cc, table: frozenset(date(2026, 8, d) for d in range(1, 32)),
+        entsoe_ingestion_fn=lambda *a, **k: _entsoe_result(),
+        open_meteo_ingestion_fn=lambda *a, **k: _open_meteo_result(),
+        worldbank_ingestion_fn=lambda *a, **k: _worldbank_result(),
+    )
+
+    # Second failure, still below GIVE_UP_AFTER_ATTEMPTS=3 — stays failed.
+    assert result.combo_statuses[(SOURCE_ENTSOE, "IE", "generation")] == STATUS_FAILED
+
+
+def test_given_up_lets_the_walker_advance_past_the_month():
+    # Integration-level check that given_up genuinely unblocks
+    # determine_target_month, not just that the status gets set.
+    entries = {
+        (SOURCE_ENTSOE, "IE", "load", date(2026, 8, 1)): CheckpointEntry(STATUS_SUCCESS, 1),
+        (SOURCE_ENTSOE, "IE", "generation", date(2026, 8, 1)): CheckpointEntry(STATUS_GIVEN_UP, 3),
+        (SOURCE_ENTSOE, "IE", "price", date(2026, 8, 1)): CheckpointEntry(STATUS_SUCCESS, 1),
+        (SOURCE_OPEN_METEO, "IE", OPEN_METEO_DATASET, date(2026, 8, 1)): CheckpointEntry(STATUS_SUCCESS, 1),
+    }
+
+    target = determine_target_month(
+        MagicMock(), [IRELAND], reference_date=date(2026, 9, 8),
+        checkpoint_reader=lambda spark, table_name: entries,
+    )
+
+    assert target == date(2026, 7, 1)  # August is done (given_up counts), moved on to July
+
+
 def test_run_backfill_month_self_pauses_when_nothing_left_to_backfill():
     result = run_backfill_month(
         MagicMock(),
@@ -158,8 +235,9 @@ def test_run_backfill_month_self_pauses_when_nothing_left_to_backfill():
         countries=[IRELAND],
         reference_date=date(2015, 2, 15),
         checkpoint_reader=lambda spark, table_name: {
-            (SOURCE_ENTSOE, "IE", ds, date(2015, 1, 1)): STATUS_SUCCESS for ds in ("load", "generation", "price")
-        } | {(SOURCE_OPEN_METEO, "IE", OPEN_METEO_DATASET, date(2015, 1, 1)): STATUS_SUCCESS},
+            (SOURCE_ENTSOE, "IE", ds, date(2015, 1, 1)): CheckpointEntry(STATUS_SUCCESS, 1)
+            for ds in ("load", "generation", "price")
+        } | {(SOURCE_OPEN_METEO, "IE", OPEN_METEO_DATASET, date(2015, 1, 1)): CheckpointEntry(STATUS_SUCCESS, 1)},
     )
 
     assert result.target_month is None

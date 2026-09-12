@@ -11,10 +11,12 @@ import pytest
 from src.orchestration.backfill_checkpoint import (
     BACKFILL_HISTORICAL_START,
     STATUS_FAILED,
+    STATUS_GIVEN_UP,
     STATUS_SUCCESS,
     STATUS_UNAVAILABLE,
     build_checkpoint_row,
     buffered_entsoe_range,
+    CheckpointEntry,
     CheckpointKey,
     month_date_range,
     month_is_complete,
@@ -81,27 +83,38 @@ def test_next_backfill_month_returns_newest_incomplete_month():
 
 
 def test_month_is_complete_true_when_all_combos_done():
-    statuses = {
-        ("entsoe", "IE", "load"): STATUS_SUCCESS,
-        ("entsoe", "IE", "generation"): STATUS_UNAVAILABLE,
+    entries = {
+        ("entsoe", "IE", "load"): CheckpointEntry(STATUS_SUCCESS, 1),
+        ("entsoe", "IE", "generation"): CheckpointEntry(STATUS_UNAVAILABLE, 1),
     }
     combos = [("entsoe", "IE", "load"), ("entsoe", "IE", "generation")]
-    assert month_is_complete(statuses, combos) is True
+    assert month_is_complete(entries, combos) is True
+
+
+def test_month_is_complete_true_when_a_combo_has_given_up():
+    # given_up counts as done too — one stuck combo must not block the
+    # walker forever.
+    entries = {
+        ("entsoe", "IE", "load"): CheckpointEntry(STATUS_SUCCESS, 1),
+        ("entsoe", "IE", "generation"): CheckpointEntry(STATUS_GIVEN_UP, 3),
+    }
+    combos = [("entsoe", "IE", "load"), ("entsoe", "IE", "generation")]
+    assert month_is_complete(entries, combos) is True
 
 
 def test_month_is_complete_false_when_a_combo_is_missing():
-    statuses = {("entsoe", "IE", "load"): STATUS_SUCCESS}
+    entries = {("entsoe", "IE", "load"): CheckpointEntry(STATUS_SUCCESS, 1)}
     combos = [("entsoe", "IE", "load"), ("entsoe", "IE", "generation")]
-    assert month_is_complete(statuses, combos) is False
+    assert month_is_complete(entries, combos) is False
 
 
 def test_month_is_complete_false_when_a_combo_failed():
-    statuses = {
-        ("entsoe", "IE", "load"): STATUS_SUCCESS,
-        ("entsoe", "IE", "generation"): STATUS_FAILED,
+    entries = {
+        ("entsoe", "IE", "load"): CheckpointEntry(STATUS_SUCCESS, 1),
+        ("entsoe", "IE", "generation"): CheckpointEntry(STATUS_FAILED, 1),
     }
     combos = [("entsoe", "IE", "load"), ("entsoe", "IE", "generation")]
-    assert month_is_complete(statuses, combos) is False
+    assert month_is_complete(entries, combos) is False
 
 
 def test_build_checkpoint_row_shape():

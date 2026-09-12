@@ -20,8 +20,9 @@ A `(source, country_code, dataset, month)` combination is classified, after inge
 - `success` — every calendar day in the month has real Bronze data.
 - `unavailable` — zero data for the whole month **and** the ingestion run explicitly reported "no data" for every window attempted (ENTSO-E's `Acknowledgement_MarketDocument` no-data case). A confirmed legitimate absence, not a guess from an empty result alone.
 - `failed` — anything else, including a *partial* month (some days present, some not). A partial month is never treated as good enough to advance past; it stays `failed`/eligible for retry on the next scheduled run.
+- `given_up` — a combination that stayed `failed` for `GIVE_UP_AFTER_ATTEMPTS` (3) consecutive attempts without ever producing a clean `unavailable` acknowledgement. Deliberately distinct from `unavailable`: this means "we don't know and stopped asking," not "confirmed nothing is there." Exists so one persistently-erroring combination (e.g. a single country's data item broken by an upstream migration) can't block every older month forever — without this, `failed` retries indefinitely with no cap. Not retried automatically after this; the real data, if it later becomes available, still reaches Gold on the next daily Silver rebuild regardless of this table, since Silver reprocesses all of Bronze unconditionally every run — a manual, scoped re-fetch (e.g. `jobs submit` targeting just that country) is the intended way to recover a `given_up` combo, not automation.
 
-Only `success` and `unavailable` let the walker move to an older month.
+Only `success`, `unavailable`, and `given_up` let the walker move to an older month.
 
 Implementation: `src/orchestration/backfill_completeness.py` (`evaluate_month_coverage`, `classify_month_result`) — pure Python, compares actual Bronze-covered dates against the full calendar-day set for the month.
 
@@ -71,6 +72,7 @@ Task-level `max_retries: 0` in the job resource, deliberately: an immediate retr
 2. A month with full calendar-day coverage for every expected combination is classified `success`.
 3. A month with confirmed zero data for a whole combination (every window explicitly "no data") is classified `unavailable`, not `failed`.
 4. A month with partial coverage for any combination is classified `failed` and is retried, never silently advanced past.
+4a. A combination that fails `GIVE_UP_AFTER_ATTEMPTS` (3) consecutive times without ever producing a confirmed `unavailable` acknowledgement is classified `given_up`, unblocking the walker; it is not retried automatically afterward.
 5. ENTSO-E requests within a backfill month use ~7-day chunks with a 2-day boundary buffer; only in-month dates count toward completeness.
 6. Open-Meteo requests the exact calendar month, no buffer.
 7. The job schedule runs every 2 hours, `01:00`–`23:00` UTC.

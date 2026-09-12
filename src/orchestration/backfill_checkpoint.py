@@ -47,12 +47,33 @@ STATUS_IN_PROGRESS = "in_progress"
 STATUS_SUCCESS = "success"
 STATUS_UNAVAILABLE = "unavailable"  # legitimately no data for the whole month
 STATUS_FAILED = "failed"
+# A combo that has failed (never a clean `unavailable` acknowledgement)
+# this many times in a row stops blocking the walker — see
+# STATUS_GIVEN_UP below. Deliberately small: this is a safety valve
+# against one stubborn combo blocking every older month forever, not a
+# tolerance for normal transient failures (the daily/backfill jobs'
+# own scheduled re-fires are already the real retry mechanism).
+GIVE_UP_AFTER_ATTEMPTS = 3
+# A combo that failed GIVE_UP_AFTER_ATTEMPTS times in a row without ever
+# producing a clean `unavailable` acknowledgement. Deliberately distinct
+# from `unavailable`: that means ENTSO-E/Open-Meteo confirmed there is
+# nothing there; this means we don't know and stopped asking for now.
+# Counts as done for the walker (never blocks older months forever over
+# one stuck combo), but stays visibly distinct in the checkpoint table
+# so it can be found and manually re-checked later (e.g. a scoped
+# `jobs submit` targeting just that country) — see project memory for
+# why this isn't automated: getting the real data, if it ever recovers,
+# reaches Gold on the next daily Silver/Gold rebuild regardless of what
+# this table says, since Silver reprocesses all of Bronze every run.
+STATUS_GIVEN_UP = "given_up"
 
 # Only these statuses let the walker move past a month. `unavailable`
 # counts as done (confirmed, not just absent) per the explicit rule:
 # only advance past a month once it is fully accounted for, never
-# because it merely looks empty.
-_DONE_STATUSES = frozenset({STATUS_SUCCESS, STATUS_UNAVAILABLE})
+# because it merely looks empty. `given_up` counts as done too, once
+# GIVE_UP_AFTER_ATTEMPTS is reached, so one stuck combo can't block
+# every older month forever.
+_DONE_STATUSES = frozenset({STATUS_SUCCESS, STATUS_UNAVAILABLE, STATUS_GIVEN_UP})
 
 SOURCE_ENTSOE = "entsoe"
 SOURCE_OPEN_METEO = "open_meteo"
@@ -69,6 +90,12 @@ class CheckpointKey:
     country_code: str
     dataset: str
     month_start: date
+
+
+@dataclass(frozen=True)
+class CheckpointEntry:
+    status: str
+    attempt_count: int
 
 
 _ONE_DAY = timedelta(days=1)
@@ -140,15 +167,20 @@ def next_backfill_month(
     return None
 
 
-def month_is_complete(statuses: Dict[Tuple[str, str, str], str], expected_combos: List[Tuple[str, str, str]]) -> bool:
+def month_is_complete(
+    entries: Dict[Tuple[str, str, str], CheckpointEntry], expected_combos: List[Tuple[str, str, str]]
+) -> bool:
     """True iff every `(source, country_code, dataset)` in
-    `expected_combos` has a recorded status in `statuses` that is
-    `success` or `unavailable`. A missing entry (never attempted) or
-    any other status (`pending`/`in_progress`/`failed`) means not
-    complete — this is what stops the walker from skipping past a
-    month that only partially succeeded.
+    `expected_combos` has a recorded entry in `entries` whose status is
+    `success`, `unavailable`, or `given_up`. A missing entry (never
+    attempted) or any other status (`pending`/`in_progress`/`failed`)
+    means not complete — this is what stops the walker from skipping
+    past a month that only partially succeeded.
     """
-    return all(statuses.get(combo) in _DONE_STATUSES for combo in expected_combos)
+    return all(
+        (entries[combo].status if combo in entries else None) in _DONE_STATUSES
+        for combo in expected_combos
+    )
 
 
 # --- Spark/Delta-backed checkpoint persistence -----------------------
@@ -157,8 +189,10 @@ def month_is_complete(statuses: Dict[Tuple[str, str, str], str], expected_combos
 # module stays importable and unit-testable without PySpark installed.
 
 
-def read_checkpoint_statuses(spark, table_name: str = CHECKPOINT_TABLE_NAME) -> Dict[Tuple[str, str, str, date], str]:
-    """Return `{(source, country_code, dataset, month_start): status}`
+def read_checkpoint_statuses(
+    spark, table_name: str = CHECKPOINT_TABLE_NAME
+) -> Dict[Tuple[str, str, str, date], CheckpointEntry]:
+    """Return `{(source, country_code, dataset, month_start): CheckpointEntry}`
     for every row currently in the checkpoint table (empty dict if the
     table does not exist yet — nothing has ever been attempted).
     """
@@ -166,10 +200,11 @@ def read_checkpoint_statuses(spark, table_name: str = CHECKPOINT_TABLE_NAME) -> 
         return {}
 
     rows = spark.table(table_name).select(
-        "source", "country_code", "dataset", "month_start", "status"
+        "source", "country_code", "dataset", "month_start", "status", "attempt_count"
     ).collect()
     return {
-        (row.source, row.country_code, row.dataset, date.fromisoformat(row.month_start)): row.status
+        (row.source, row.country_code, row.dataset, date.fromisoformat(row.month_start)):
+            CheckpointEntry(row.status, row.attempt_count)
         for row in rows
     }
 

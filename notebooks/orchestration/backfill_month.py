@@ -103,7 +103,19 @@ else:
     for combo, status in sorted(result.combo_statuses.items()):
         print(f"  {combo}: {status}")
 
-    from src.orchestration.backfill_checkpoint import STATUS_FAILED
+    from src.orchestration.backfill_checkpoint import GIVE_UP_AFTER_ATTEMPTS, STATUS_FAILED, STATUS_GIVEN_UP
+
+    given_up_combos = [combo for combo, status in result.combo_statuses.items() if status == STATUS_GIVEN_UP]
+    if given_up_combos:
+        # Not retried automatically anymore — the walker treats these as
+        # done so one stuck combo can't block every older month forever.
+        # Data stays genuinely missing for these unless someone manually
+        # re-fetches them later (e.g. a scoped jobs submit targeting
+        # just that country) — see backfill_checkpoint.STATUS_GIVEN_UP.
+        print(
+            f"WARNING: gave up on {len(given_up_combos)} combination(s) after "
+            f"{GIVE_UP_AFTER_ATTEMPTS} failed attempts, will NOT retry automatically: {given_up_combos}"
+        )
 
     failed_combos = [combo for combo, status in result.combo_statuses.items() if status == STATUS_FAILED]
     if failed_combos:

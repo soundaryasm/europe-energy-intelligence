@@ -30,11 +30,15 @@ from src.ingestion.open_meteo_pipeline import IngestionResult as OpenMeteoIngest
 from src.ingestion.worldbank_pipeline import BRONZE_TABLE_NAME as WORLDBANK_BRONZE_TABLE
 from src.orchestration.backfill_checkpoint import (
     CHECKPOINT_TABLE_NAME,
+    CheckpointEntry,
     CheckpointKey,
     ENTSOE_BACKFILL_CHUNK_DAYS,
+    GIVE_UP_AFTER_ATTEMPTS,
     OPEN_METEO_DATASET,
     SOURCE_ENTSOE,
     SOURCE_OPEN_METEO,
+    STATUS_FAILED,
+    STATUS_GIVEN_UP,
     build_checkpoint_row,
     buffered_entsoe_range,
     month_date_range,
@@ -75,22 +79,22 @@ def determine_target_month(
     countries: List[CountryConfig],
     checkpoint_table: str = CHECKPOINT_TABLE_NAME,
     reference_date: Optional[date] = None,
-    checkpoint_reader: Callable[..., Dict[Tuple[str, str, str, date], str]] = read_checkpoint_statuses,
+    checkpoint_reader: Callable[..., Dict[Tuple[str, str, str, date], CheckpointEntry]] = read_checkpoint_statuses,
 ) -> Optional[date]:
     """The newest historical month not yet fully complete, or `None` if
     the backfill has reached `BACKFILL_HISTORICAL_START` — the signal to
     self-pause the job's schedule.
     """
-    statuses = checkpoint_reader(spark, checkpoint_table)
+    entries = checkpoint_reader(spark, checkpoint_table)
     combos = expected_combos(countries)
 
     def is_complete(month: date) -> bool:
-        month_statuses = {
-            (src, cc, ds): status
-            for (src, cc, ds, m), status in statuses.items()
+        month_entries = {
+            (src, cc, ds): entry
+            for (src, cc, ds, m), entry in entries.items()
             if m == month
         }
-        return month_is_complete(month_statuses, combos)
+        return month_is_complete(month_entries, combos)
 
     return next_backfill_month(is_complete, reference_date=reference_date)
 
@@ -153,6 +157,25 @@ def _default_worldbank_ingestion_fn(*args, **kwargs):
     return run_ingestion(*args, **kwargs)
 
 
+def _next_status_and_attempt_count(
+    status: str,
+    key: Tuple[str, str, str, date],
+    existing_entries: Dict[Tuple[str, str, str, date], CheckpointEntry],
+) -> Tuple[str, int]:
+    """Bump this combo's attempt count from whatever it was last time,
+    and escalate a repeatedly-`failed` combo to `given_up` once it hits
+    `GIVE_UP_AFTER_ATTEMPTS` — see `backfill_checkpoint.STATUS_GIVEN_UP`
+    for why this exists (a single stuck combo must not block every
+    older month forever) and why it's distinct from `unavailable` (a
+    confirmed absence, not a give-up).
+    """
+    previous = existing_entries.get(key)
+    attempt_count = (previous.attempt_count if previous else 0) + 1
+    if status == STATUS_FAILED and attempt_count >= GIVE_UP_AFTER_ATTEMPTS:
+        return STATUS_GIVEN_UP, attempt_count
+    return status, attempt_count
+
+
 def run_backfill_month(
     spark,
     *,
@@ -162,7 +185,7 @@ def run_backfill_month(
     entsoe_table: str = ENTSOE_BRONZE_TABLE,
     open_meteo_table: str = OPEN_METEO_BRONZE_TABLE,
     reference_date: Optional[date] = None,
-    checkpoint_reader: Callable[..., Dict[Tuple[str, str, str, date], str]] = read_checkpoint_statuses,
+    checkpoint_reader: Callable[..., Dict[Tuple[str, str, str, date], CheckpointEntry]] = read_checkpoint_statuses,
     checkpoint_writer: Callable[..., int] = write_checkpoint_rows,
     entsoe_covered_dates_fn: Callable[..., FrozenSet[date]] = _entsoe_covered_dates,
     open_meteo_covered_dates_fn: Callable[..., FrozenSet[date]] = _open_meteo_covered_dates,
@@ -193,6 +216,12 @@ def run_backfill_month(
 
     logger.info("Backfill target month: %s", target_month)
     now_iso = datetime.now(dt_timezone.utc).isoformat()
+    # Re-read rather than reuse determine_target_month's own read: that
+    # call doesn't return its entries, and this is a cheap Delta read —
+    # simpler than threading the result through, matching this
+    # project's existing "cheap redundant reads are fine" calls
+    # elsewhere (e.g. World Bank's always-refetch design).
+    existing_entries = checkpoint_reader(spark, checkpoint_table)
 
     entsoe_start, entsoe_end = buffered_entsoe_range(target_month)
     entsoe_result = entsoe_ingestion_fn(
@@ -240,10 +269,13 @@ def run_backfill_month(
             status = classify_month_result(
                 coverage, ingestion_reported_no_data=attempt_key in entsoe_result.unavailable,
             )
-            combo_statuses[(SOURCE_ENTSOE, country.country_code, dataset.name)] = status
+            combo_key = (SOURCE_ENTSOE, country.country_code, dataset.name)
+            entry_key = (*combo_key, target_month)
+            status, attempt_count = _next_status_and_attempt_count(status, entry_key, existing_entries)
+            combo_statuses[combo_key] = status
             checkpoint_rows.append(build_checkpoint_row(
                 CheckpointKey(SOURCE_ENTSOE, country.country_code, dataset.name, target_month),
-                status, attempt_count=1, started_at=now_iso,
+                status, attempt_count=attempt_count, started_at=now_iso,
                 completed_at=datetime.now(dt_timezone.utc).isoformat(),
                 last_error=entsoe_result.errors.get(attempt_key),
             ))
@@ -256,10 +288,13 @@ def run_backfill_month(
         # `unavailable`; a full-month weather gap is not an expected
         # legitimate condition the way an ENTSO-E source gap can be.
         status = classify_month_result(coverage, ingestion_reported_no_data=False)
-        combo_statuses[(SOURCE_OPEN_METEO, country.country_code, OPEN_METEO_DATASET)] = status
+        combo_key = (SOURCE_OPEN_METEO, country.country_code, OPEN_METEO_DATASET)
+        entry_key = (*combo_key, target_month)
+        status, attempt_count = _next_status_and_attempt_count(status, entry_key, existing_entries)
+        combo_statuses[combo_key] = status
         checkpoint_rows.append(build_checkpoint_row(
             CheckpointKey(SOURCE_OPEN_METEO, country.country_code, OPEN_METEO_DATASET, target_month),
-            status, attempt_count=1, started_at=now_iso,
+            status, attempt_count=attempt_count, started_at=now_iso,
             completed_at=datetime.now(dt_timezone.utc).isoformat(),
             last_error=open_meteo_result.errors.get(country.country_code),
         ))
