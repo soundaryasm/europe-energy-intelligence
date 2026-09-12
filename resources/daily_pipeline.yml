@@ -90,9 +90,12 @@ resources:
               # See the notebook's own sys.path bootstrap comment for why.
               bundle_root: "${workspace.file_path}"
           timeout_seconds: 3600
-          max_retries: 2
-          min_retry_interval_millis: 300000 # 5 minutes
-          retry_on_timeout: true
+          # No task-level retry: the in-process circuit breaker
+          # (src/orchestration/circuit_breaker.py) already bounds retry
+          # cost per-run, and a task-level retry 5 minutes later almost
+          # never outlives the same outage — it only repeats the same
+          # probe. Same reasoning already applied to backfill's
+          # `max_retries: 0` (specs/010-backfill-orchestration.md).
 
         - task_key: ingest_entsoe
           environment_key: python_notebook_env
@@ -107,9 +110,8 @@ resources:
               secret_key: "ENTSOE_API_TOKEN"
               bundle_root: "${workspace.file_path}"
           timeout_seconds: 3600
-          max_retries: 2
-          min_retry_interval_millis: 300000
-          retry_on_timeout: true
+          # No task-level retry — see ingest_open_meteo's comment above;
+          # same reasoning applies here.
 
         # World Bank is intentionally independent of everything else in
         # this DAG: no date-range parameters (it always fetches whatever
@@ -127,9 +129,8 @@ resources:
             base_parameters:
               bundle_root: "${workspace.file_path}"
           timeout_seconds: 1800
-          max_retries: 2
-          min_retry_interval_millis: 300000
-          retry_on_timeout: true
+          # No task-level retry — see ingest_open_meteo's comment above;
+          # same reasoning applies here.
 
         # Silver must not start until BOTH ingestion tasks succeed
         # (implicit ALL_SUCCESS run_if — Spec 006 "Failure Behaviour").
