@@ -15,6 +15,7 @@ JOB_CONFIG_PATH = Path(__file__).resolve().parents[1] / "resources" / "daily_pip
 EXPECTED_TASK_KEYS = {
     "ingest_open_meteo",
     "ingest_entsoe",
+    "ingest_worldbank",
     "transform_silver",
     "build_dbt_gold",
     "publish_postgres",
@@ -31,14 +32,14 @@ def _tasks_by_key(job):
     return {task["task_key"]: task for task in job["tasks"]}
 
 
-def test_job_config_defines_all_five_expected_tasks():
+def test_job_config_defines_all_expected_tasks():
     job = _load_job()
     assert {task["task_key"] for task in job["tasks"]} == EXPECTED_TASK_KEYS
 
 
-def test_job_schedule_is_02_00_europe_dublin():
+def test_job_schedule_is_02_00_utc():
     job = _load_job()
-    assert job["schedule"]["timezone_id"] == "Europe/Dublin"
+    assert job["schedule"]["timezone_id"] == "UTC"
     assert job["schedule"]["quartz_cron_expression"] == "0 0 2 * * ?"
 
 
@@ -60,12 +61,32 @@ def test_ingestion_tasks_have_no_dependencies():
     tasks = _tasks_by_key(_load_job())
     assert "depends_on" not in tasks["ingest_open_meteo"]
     assert "depends_on" not in tasks["ingest_entsoe"]
+    assert "depends_on" not in tasks["ingest_worldbank"]
 
 
-def test_silver_depends_on_both_ingestion_tasks():
+def test_silver_depends_on_only_open_meteo_and_entsoe_not_worldbank():
+    # World Bank is Bronze-only for now (no Silver/Gold/Postgres builder
+    # exists yet) and deliberately independent — a World Bank failure
+    # must not block ENTSO-E/Open-Meteo from reaching Silver/Gold/Postgres.
     tasks = _tasks_by_key(_load_job())
     depends_on = {d["task_key"] for d in tasks["transform_silver"]["depends_on"]}
     assert depends_on == {"ingest_open_meteo", "ingest_entsoe"}
+
+
+def test_nothing_depends_on_worldbank():
+    job = _load_job()
+    for task in job["tasks"]:
+        depends_on = {d["task_key"] for d in task.get("depends_on", [])}
+        assert "ingest_worldbank" not in depends_on
+
+
+def test_entsoe_task_uses_the_real_secret_key():
+    # The stored secret is named ENTSOE_API_TOKEN, not the notebook
+    # widget's own stale default ("api-token") — must be explicit here,
+    # not left to fall through to that default.
+    tasks = _tasks_by_key(_load_job())
+    base_params = tasks["ingest_entsoe"]["notebook_task"]["base_parameters"]
+    assert base_params["secret_key"] == "ENTSOE_API_TOKEN"
 
 
 def test_dbt_depends_on_silver():
@@ -96,9 +117,26 @@ def test_retries_are_bounded_on_every_task_that_declares_them():
             assert 0 <= task["max_retries"] <= 5  # bounded, not "infinite retries"
 
 
-def test_dbt_task_pins_dbt_databricks_not_dbt_spark():
+def test_dbt_task_targets_workspace_gold_explicitly():
+    # The dbt_task type defaults catalog to the workspace default and
+    # schema to "default" when unset — publish_postgres reads Gold from
+    # gold_catalog=workspace.gold, so this must be explicit, not implied.
     tasks = _tasks_by_key(_load_job())
-    libraries = tasks["build_dbt_gold"].get("libraries", [])
-    packages = [lib["pypi"]["package"] for lib in libraries if "pypi" in lib]
-    assert any(pkg.startswith("dbt-databricks==") for pkg in packages)
-    assert not any("dbt-spark" in pkg for pkg in packages)
+    dbt_task = tasks["build_dbt_gold"]["dbt_task"]
+    assert dbt_task["catalog"] == "workspace"
+    assert dbt_task["schema"] == "gold"
+
+
+def test_dbt_task_pins_dbt_databricks_not_dbt_spark():
+    # A serverless task's own `libraries` field is rejected at submit
+    # time ("Libraries field is not supported for serverless task,
+    # please specify libraries in environment" — confirmed via a real
+    # one-time run), so the pin must live in the task's environment's
+    # dependencies instead, not a task-level `libraries: [...]` entry.
+    job = _load_job()
+    tasks = _tasks_by_key(job)
+    dbt_environment_key = tasks["build_dbt_gold"]["environment_key"]
+    environment = next(e for e in job["environments"] if e["environment_key"] == dbt_environment_key)
+    dependencies = environment["spec"]["dependencies"]
+    assert any(dep.startswith("dbt-databricks==") for dep in dependencies)
+    assert not any("dbt-spark" in dep for dep in dependencies)

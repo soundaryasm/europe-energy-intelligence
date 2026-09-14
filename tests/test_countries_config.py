@@ -3,10 +3,13 @@ import pytest
 
 from src.config.countries import CountryConfigError, load_countries
 
-EXPECTED_CODES = {"IE", "DE", "FR", "ES", "NL"}
+EXPECTED_CODES = {
+    "IE", "DE", "FR", "ES", "NL",
+    "BE", "PT", "PL", "CZ", "FI", "HU", "RO", "SK", "SI", "EE",
+}
 
 
-def test_load_countries_returns_five_mvp_countries():
+def test_load_countries_returns_fifteen_mvp_countries():
     countries = load_countries()
     assert {c.country_code for c in countries} == EXPECTED_CODES
 

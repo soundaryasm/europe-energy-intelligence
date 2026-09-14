@@ -83,7 +83,11 @@ The historical range must not be permanently hard-coded.
 
 After backfill, ingestion runs as part of the daily Databricks workflow.
 
-The normal execution should ingest the latest completed weather day required by the pipeline.
+Normal execution reprocesses a rolling recent-date lookback window (initially 3 calendar days, configurable — same shape as ENTSO-E's, see Spec 006), not only the single latest completed weather day, using the Forecast API (not the Historical/Archive API — see "Source" above).
+
+This is not just a scheduling preference: the Historical/Archive API's ERA5-reanalysis data has an empirically confirmed settlement lag for very recent dates (the same date/location returns a different value depending on which endpoint is queried), while the Forecast API's operational models refresh every 1-6 hours. Without a lookback, a value fetched once from the Forecast API would never be revisited even after a more accurate model run (or the eventual settled value) becomes available.
+
+**Consequence that must be documented wherever Gold/dashboard data is described:** a recent date's weather metric can show a small delta if viewed again a few days later, once a later pipeline run has re-fetched and replaced the earlier value via the existing idempotent Bronze MERGE. This is expected, not a data-quality defect.
 
 The implementation must also support explicitly reprocessing previous dates.
 
@@ -254,12 +258,12 @@ Failures must remain visible in Databricks execution history.
 This specification is complete when:
 
 1. Open-Meteo ingestion executes successfully on Databricks.
-2. All five configured countries can be processed.
+2. All configured countries can be processed (15 as of the country expansion; not hard-coded to a fixed count).
 3. Daily mean temperature is retrieved.
 4. Daily mean wind speed is retrieved.
 5. Daily shortwave radiation sum is retrieved.
 6. A configurable 24-month historical backfill can be executed.
-7. Recent completed days can be ingested incrementally.
+7. Recent dates are ingested via a configurable rolling lookback against the Forecast API, and the possibility of a later delta from lookback reprocessing is documented for Gold/dashboard consumers.
 8. Individual historical dates can be reprocessed.
 9. Data is persisted as Bronze Delta data.
 10. Both configured and returned coordinates are retained.

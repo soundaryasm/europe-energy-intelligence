@@ -89,13 +89,16 @@ def test_fetch_weather_returns_payload_on_success():
 
 
 def test_fetch_weather_raises_after_exhausting_bounded_retries_on_5xx():
+    # Retry mechanics themselves (backoff, Retry-After, attempt count) are
+    # covered generically in tests/test_http.py — this just confirms
+    # max_retries/sleep_fn are actually forwarded to it.
     session = MagicMock()
     session.get.return_value = _mock_response(500, {}, text="internal error")
 
     with pytest.raises(OpenMeteoAPIError):
-        fetch_weather(SAMPLE_REQUEST, session=session, max_retries=1, sleep_fn=lambda _: None)
+        fetch_weather(SAMPLE_REQUEST, session=session, max_retries=2, sleep_fn=lambda _: None)
 
-    assert session.get.call_count == 2  # 1 initial attempt + 1 retry, never unbounded
+    assert session.get.call_count == 2  # max_retries is now the total attempt count
 
 
 def test_fetch_weather_retries_are_bounded_on_connection_errors():
@@ -105,7 +108,7 @@ def test_fetch_weather_retries_are_bounded_on_connection_errors():
     with pytest.raises(OpenMeteoAPIError):
         fetch_weather(SAMPLE_REQUEST, session=session, max_retries=2, sleep_fn=lambda _: None)
 
-    assert session.get.call_count == 3  # 1 initial attempt + 2 retries
+    assert session.get.call_count == 2  # max_retries is now the total attempt count
 
 
 def test_fetch_weather_recovers_after_one_transient_failure():

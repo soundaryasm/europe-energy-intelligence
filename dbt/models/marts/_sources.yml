@@ -79,3 +79,22 @@ sources:
           - name: solar_radiation_mj_m2
           - name: reference_location
           - name: source_system
+
+      - name: silver_worldbank_annual
+        description: >
+          Annual population/GDP/urbanization indicators per country,
+          produced by src/transformations/silver_worldbank.py. Grain:
+          country + year (NOT country + date) — a given year's values
+          are the same for every day of that year; Gold joins this in
+          by `year(local_date)`, not `local_date` directly. A missing
+          row for the current year is expected (World Bank publishes
+          with a lag) and must not be treated as an error.
+        columns:
+          - name: country_code
+          - name: year
+          - name: population
+          - name: gdp_constant_2015_usd
+          - name: gdp_per_capita_constant_2015_usd
+          - name: urban_population_pct
+          - name: country_name
+          - name: source_system

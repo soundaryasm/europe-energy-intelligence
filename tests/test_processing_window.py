@@ -17,9 +17,20 @@ def test_latest_completed_date_is_yesterday_relative_to_reference():
     assert latest_completed_date(REFERENCE) == date(2026, 9, 3)
 
 
-def test_open_meteo_daily_mode_processes_only_the_latest_completed_date():
-    start, end = resolve_open_meteo_window("daily", reference_date=REFERENCE)
-    assert start == end == date(2026, 9, 3)
+def test_open_meteo_daily_mode_uses_the_configured_lookback():
+    start, end = resolve_open_meteo_window("daily", lookback_days=3, reference_date=REFERENCE)
+    assert end == date(2026, 9, 3)
+    assert start == date(2026, 9, 1)  # 3 calendar days: Sep 1, 2, 3
+
+
+def test_open_meteo_daily_mode_lookback_is_not_hardcoded():
+    start, end = resolve_open_meteo_window("daily", lookback_days=7, reference_date=REFERENCE)
+    assert (end - start).days == 6  # 7 calendar days inclusive
+
+
+def test_open_meteo_daily_mode_rejects_non_positive_lookback():
+    with pytest.raises(ProcessingWindowError):
+        resolve_open_meteo_window("daily", lookback_days=0, reference_date=REFERENCE)
 
 
 def test_open_meteo_backfill_mode_uses_explicit_range():

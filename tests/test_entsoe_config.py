@@ -3,7 +3,10 @@ import pytest
 
 from src.config.entsoe import EntsoeConfigError, load_entsoe_domains
 
-EXPECTED_CODES = {"IE", "DE", "FR", "ES", "NL"}
+EXPECTED_CODES = {
+    "IE", "DE", "FR", "ES", "NL",
+    "BE", "PT", "PL", "CZ", "FI", "HU", "RO", "SK", "SI", "EE",
+}
 
 
 def test_load_entsoe_domains_covers_all_mvp_countries():
@@ -11,14 +14,14 @@ def test_load_entsoe_domains_covers_all_mvp_countries():
     assert set(domains.keys()) == EXPECTED_CODES
 
 
-def test_load_entsoe_domains_nl_is_validated_others_are_not():
-    # Documents the open Spec 002 blocker: codes are sourced from public
-    # docs, not yet confirmed against a live ENTSO-E account — except NL,
-    # confirmed against a real tested request/response (see
-    # tmp/entsoe.md, local-only reference notes).
+def test_load_entsoe_domains_all_are_validated():
+    # Every domain has now been empirically confirmed: IE/DE/FR/ES/NL via
+    # extensive real production ingestion, and the 10 expansion countries
+    # via a dedicated historical coverage probe (2026-09-06, 313/315 real
+    # checks against live ENTSO-E) — see entsoe_domains.yaml's header and
+    # project memory for the full evidence trail.
     domains = load_entsoe_domains()
-    assert domains["NL"].validated is True
-    assert all(entry.validated is False for code, entry in domains.items() if code != "NL")
+    assert all(entry.validated is True for entry in domains.values())
 
 
 def test_load_entsoe_domains_rejects_duplicate_country(tmp_path):

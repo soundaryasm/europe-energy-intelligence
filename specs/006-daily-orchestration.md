@@ -57,7 +57,25 @@ The daily workflow does not treat every source identically.
 
 ### Open-Meteo
 
-Normally process the latest completed weather date required by the pipeline.
+Reprocess a rolling recent-date window, not only the latest completed weather date (added after empirical testing found the Historical/Archive API's ERA5-reanalysis data has a real settlement lag for very recent dates, and the same date's value differs depending on which Open-Meteo endpoint is queried).
+
+Initial lookback: `3 calendar days` (same length as ENTSO-E's, by explicit decision — not required to always match).
+
+Normal daily execution queries the **Forecast API**, not the Historical/Archive API, for this recent-date window: the Forecast API's operational models refresh every 1-6 hours, while the Historical/Archive API's ERA5 reanalysis settles over roughly 2 days. Backfill and reprocess of older, already-settled dates use the Historical/Archive API as before — the lag is a non-issue for dates that far in the past.
+
+The lookback length must be configurable, same requirement as ENTSO-E's.
+
+## Why Open-Meteo Uses a Lookback
+
+A value fetched from the Forecast API for a very recent date reflects whichever operational model run was most recent at fetch time. A later run (or the eventual ERA5-settled value) can differ from it — confirmed empirically: the same date/location returned different `temperature_2m_mean`/`wind_speed_10m_mean`/`shortwave_radiation_sum` values from the Forecast API versus the Historical/Archive API.
+
+Therefore the system must not assume:
+
+`date successfully ingested once = date's weather value final`
+
+Recent-date reprocessing (the lookback) lets a later, more accurate model run overwrite an earlier one via the existing idempotent Bronze MERGE — the same mechanism ENTSO-E's lookback already relies on.
+
+**User-facing consequence, document this clearly wherever the Gold/dashboard data is described:** a weather (and, separately, an ENTSO-E) metric for a very recent date can show a small delta if viewed again a few days later, once a subsequent pipeline run has re-fetched and replaced the earlier value. This is expected behavior, not a data-quality defect — it is the tradeoff of prioritizing eventual accuracy over freezing the first-seen value permanently.
 
 ### ENTSO-E
 
@@ -535,7 +553,8 @@ This specification is complete when:
 3. Open-Meteo and ENTSO-E ingestion are separate tasks.
 4. ENTSO-E normal daily execution uses a configurable recent-date lookback.
 5. The initial ENTSO-E lookback is three calendar days.
-6. Open-Meteo processes the required latest completed weather period.
+6. Open-Meteo normal daily execution uses a configurable recent-date lookback (initially three calendar days) against the Forecast API, not the Historical/Archive API; backfill/reprocess of older dates use the Historical/Archive API.
+6a. The possibility of a small delta appearing later for a recent date's weather (or ENTSO-E) metric, due to lookback reprocessing, is documented for anyone consuming the Gold/dashboard data — not left as a silent, unexplained behavior.
 7. A canonical processing window is passed between tasks.
 8. Daily, backfill, and reprocess execution modes are supported.
 9. Task dependencies enforce correct execution order.

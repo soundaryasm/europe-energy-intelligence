@@ -1,35 +1,83 @@
 # ENTSO-E bidding-zone/domain (EIC) codes for the MVP countries (Spec 002).
 #
 # SOURCE: publicly documented ENTSO-E Transparency Platform domain codes.
-# STATUS: NOT independently re-verified against a live ENTSO-E account/API
-# in this environment (no API credentials are available here), except NL
-# — see below. Every other entry is marked `validated: false` until
-# someone with ENTSO-E API access confirms it against a real
-# request/response.
+# STATUS: every domain below has been empirically confirmed — either
+# through extensive real production ingestion this project (IE/DE/FR/ES/NL,
+# validated via repeated real Bronze ingestion/reprocessing runs against
+# live ENTSO-E), or through a dedicated historical coverage probe
+# (BE/PT/PL/CZ/FI/HU/RO/SK/SI/EE, run 2026-09-06 against real dates
+# 2015-01-05 through 2026-06-15 for all three datasets — 313/315 checks
+# returned real data; see project memory for the full coverage matrix).
 #
 # Spec 002: "Codes must be validated against ENTSO-E before being
-# committed to production configuration." Treat `validated: false` as an
-# open blocker, not a soft warning.
+# committed to production configuration." `validated: false` is an open
+# blocker, not a soft warning — there are none left below.
+#
+# KNOWN GAP: Germany's bidding zone changed on 2018-10-01 (confirmed via
+# the same probe). The domain below (DE-LU) is only correct from
+# 2018-10-01 onward; before that, Germany was part of a combined DE-AT-LU
+# zone (EIC 10Y1001A1001A63L). This single-domain-per-country schema does
+# not yet support an effective-dated mapping — that is a known,
+# deliberately deferred requirement for the future historical backfill
+# work (not needed for the current daily/recent-data pipeline, which
+# never requests pre-2018 data).
 domains:
   - country_code: IE
     domain: "10Y1001A1001A59C"  # Ireland (SEM) bidding zone
-    validated: false
+    validated: true
 
   - country_code: DE
-    domain: "10Y1001A1001A82H"  # Germany-Luxembourg (DE-LU) bidding zone
-    validated: false
+    domain: "10Y1001A1001A82H"  # Germany-Luxembourg (DE-LU) bidding zone, valid from 2018-10-01
+    validated: true
 
   - country_code: FR
     domain: "10YFR-RTE------C"
-    validated: false
+    validated: true
 
   - country_code: ES
     domain: "10YES-REE------0"
-    validated: false
+    validated: true
 
   - country_code: NL
     domain: "10YNL----------L"
-    # Confirmed against a real tested documentType=A65 request/response
-    # (see tmp/entsoe.md, local-only reference notes) — this is the only
-    # domain code independently verified in this environment.
+    validated: true
+
+  - country_code: BE
+    domain: "10YBE----------2"
+    validated: true
+
+  - country_code: PT
+    domain: "10YPT-REN------W"
+    validated: true
+
+  - country_code: PL
+    domain: "10YPL-AREA-----S"
+    validated: true
+
+  - country_code: CZ
+    domain: "10YCZ-CEPS-----N"
+    validated: true
+
+  - country_code: FI
+    domain: "10YFI-1--------U"
+    validated: true
+
+  - country_code: HU
+    domain: "10YHU-MAVIR----U"
+    validated: true
+
+  - country_code: RO
+    domain: "10YRO-TEL------P"
+    validated: true
+
+  - country_code: SK
+    domain: "10YSK-SEPS-----K"
+    validated: true
+
+  - country_code: SI
+    domain: "10YSI-ELES-----O"
+    validated: true
+
+  - country_code: EE
+    domain: "10Y1001A1001A39I"
     validated: true

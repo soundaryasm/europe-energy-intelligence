@@ -21,6 +21,7 @@ def build_bronze_records(
     payload: Mapping[str, Any],
     country: CountryConfig,
     *,
+    source_endpoint: str = SOURCE_ENDPOINT,
     ingestion_timestamp: Optional[datetime] = None,
 ) -> List[dict]:
     """Flatten one Open-Meteo daily response into deterministic Bronze rows.
@@ -33,6 +34,15 @@ def build_bronze_records(
     `business_key()` is stable across reruns of the same country/date
     range, which is what allows a downstream Delta MERGE write to stay
     idempotent.
+
+    `source_endpoint` records which Open-Meteo API actually produced this
+    row (`SOURCE_ENDPOINT` for the Historical/Archive API used for
+    backfill, `SOURCE_ENDPOINT_FORECAST` for the Forecast API used for
+    recent/daily dates) — the two can return a slightly different value
+    for the same date, since Forecast's operational-model estimate for a
+    recent day is provisional in a different sense than Archive's
+    ERA5-reanalysis value is. Recording provenance lets that be traced
+    later rather than silently blended.
     """
     ts = ingestion_timestamp or datetime.now(dt_timezone.utc)
 
@@ -71,7 +81,7 @@ def build_bronze_records(
                     "source_variable": variable,
                     "source_value": source_value,
                     "source_unit": daily_units.get(variable),
-                    "source_endpoint": SOURCE_ENDPOINT,
+                    "source_endpoint": source_endpoint,
                     "source_system": SOURCE_SYSTEM,
                     "ingestion_timestamp": ts.isoformat(),
                 }

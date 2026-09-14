@@ -13,16 +13,16 @@ seeds:
       config will disagree.
     columns:
       - name: country_code
-        tests: [unique, not_null]
+        data_tests: [unique, not_null]
       - name: country_name
-        tests: [not_null]
+        data_tests: [not_null]
       - name: reference_location
-        tests: [not_null]
+        data_tests: [not_null]
       - name: latitude
-        tests: [not_null]
+        data_tests: [not_null]
       - name: longitude
-        tests: [not_null]
+        data_tests: [not_null]
       - name: timezone
-        tests: [not_null]
+        data_tests: [not_null]
       - name: entsoe_domain
-        tests: [not_null]
+        data_tests: [not_null]

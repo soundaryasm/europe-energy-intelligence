@@ -50,6 +50,16 @@ generation_totals as (
     from generation_daily
 ),
 
+-- World Bank is annual, not daily (see silver_worldbank_annual) — every
+-- day of a given year carries that year's same population/GDP figures.
+-- Left join, not inner: a year with no published World Bank data yet
+-- (e.g. the current year) must not drop that year's energy rows.
+world_bank as (
+    select country_code, year, population, gdp_constant_2015_usd,
+        gdp_per_capita_constant_2015_usd, urban_population_pct
+    from {{ source('silver', 'silver_worldbank_annual') }}
+),
+
 all_keys as (
     select country_code, local_date from demand
     union
@@ -74,7 +84,18 @@ select
         when generation_totals.total_generation_mwh is null then null
         else generation_totals.renewable_generation_mwh
              / nullif(generation_totals.total_generation_mwh, 0) * 100
-    end as renewable_generation_pct
+    end as renewable_generation_pct,
+    world_bank.population,
+    world_bank.gdp_constant_2015_usd,
+    world_bank.gdp_per_capita_constant_2015_usd,
+    world_bank.urban_population_pct,
+    -- Spec 004 null-vs-zero semantics: no population for that
+    -- country/year means the ratio is unknown, never a fabricated 0.
+    case
+        when demand.daily_demand_mwh is null or world_bank.population is null
+             or world_bank.population = 0 then null
+        else demand.daily_demand_mwh * 1000 / world_bank.population  -- MWh -> kWh
+    end as demand_kwh_per_capita
 from all_keys
 left join demand
     on demand.country_code = all_keys.country_code
@@ -85,6 +106,9 @@ left join price
 left join generation_totals
     on generation_totals.country_code = all_keys.country_code
     and generation_totals.local_date = all_keys.local_date
+left join world_bank
+    on world_bank.country_code = all_keys.country_code
+    and world_bank.year = year(all_keys.local_date)
 inner join {{ ref('dim_country') }} dc
     on dc.country_code = all_keys.country_code
 inner join {{ ref('dim_date') }} dd

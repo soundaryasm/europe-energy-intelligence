@@ -23,6 +23,22 @@
 
 # COMMAND ----------
 
+# Bundle deployments run this notebook from a plain Workspace Files
+# location, not a Databricks Repo — which does not add the repo root to
+# sys.path automatically the way a Repo clone does. Confirmed via a
+# real deployed run failing with `ModuleNotFoundError: No module named
+# 'src'` (2026-09-09) despite the identical code working fine from a
+# Repos-synced folder. Must run before any `from src...` import below.
+dbutils.widgets.text("bundle_root", "", "Workspace root to add to sys.path (bundle deployments)")
+
+import sys
+
+_bundle_root = dbutils.widgets.get("bundle_root")
+if _bundle_root and _bundle_root not in sys.path:
+    sys.path.insert(0, _bundle_root)
+
+# COMMAND ----------
+
 from datetime import date
 
 from src.ingestion.entsoe_pipeline import run_ingestion
@@ -40,8 +56,8 @@ dbutils.widgets.text("end_date", "", "End date (backfill/reprocess, YYYY-MM-DD)"
 dbutils.widgets.text(
     "lookback_days", str(DEFAULT_ENTSOE_LOOKBACK_DAYS), "Daily-mode recent-date lookback (days)"
 )
-dbutils.widgets.text("secret_scope", "entsoe", "Databricks secret scope")
-dbutils.widgets.text("secret_key", "api-token", "Databricks secret key")
+dbutils.widgets.text("secret_scope", "europe-energy-intelligence", "Databricks secret scope")
+dbutils.widgets.text("secret_key", "ENTSOE_API_TOKEN", "Databricks secret key")
 
 execution_mode = dbutils.widgets.get("execution_mode")
 start_date_param = dbutils.widgets.get("start_date")
