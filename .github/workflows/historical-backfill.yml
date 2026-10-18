@@ -16,14 +16,18 @@
 # Spacing wider than that worst case is what keeps runs from
 # overlapping; `concurrency` below enforces it regardless.
 #
-# Odd hours rather than even so nothing fires at 00:00, where scheduled
-# workloads bunch up across the platform and a fire is most likely to be
-# delayed or dropped.
+# Odd hours at half past, rather than on the hour: GitHub delays
+# scheduled runs on shared runners and drops them outright under load,
+# and the top of the hour is the most congested slot. Observed on
+# 2026-10-18 — of six fires due, two were delivered, 28 and 58 minutes
+# late. Frequency is deliberately not reduced in response: every fire is
+# an independent retry of a resumable walk, so more fires absorb drops,
+# and `concurrency` below stops them overlapping.
 name: Historical backfill
 
 on:
   schedule:
-    - cron: "0 1-23/2 * * *"
+    - cron: "30 1-23/2 * * *"
   workflow_dispatch:
 
 # ENTSO-E rate-limits per token as well as per IP, and this workflow

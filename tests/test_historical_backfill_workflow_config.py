@@ -40,17 +40,22 @@ def test_schedule_spacing_exceeds_the_worst_case_year():
     # not its typical duration, so invocations cannot overlap.
     crons = [entry["cron"] for entry in _triggers(_load())["schedule"]]
 
-    assert crons == ["0 1-23/2 * * *"]
+    assert crons == ["30 1-23/2 * * *"]
 
 
 def test_schedule_fires_on_odd_hours_and_never_at_midnight():
-    # Nothing at 00:00, where scheduled workloads bunch up across the
-    # platform and a fire is most likely to be delayed or dropped.
     cron = _triggers(_load())["schedule"][0]["cron"]
-    minute, hour, *_ = cron.split()
+    _, hour, *_ = cron.split()
 
-    assert minute == "0"
     assert hour == "1-23/2"
+
+
+def test_schedule_avoids_the_top_of_the_hour():
+    # The most congested slot on GitHub's scheduler, where a fire is
+    # most likely to be delayed or dropped.
+    minute = _triggers(_load())["schedule"][0]["cron"].split()[0]
+
+    assert minute != "0"
 
 
 def test_concurrent_invocations_are_prevented():
