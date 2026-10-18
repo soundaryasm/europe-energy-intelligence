@@ -70,7 +70,7 @@ The MVP does not require hourly weather ingestion.
 
 ## Historical Backfill
 
-The initial execution must support a configurable backfill covering the previous 24 months.
+Historical coverage is the responsibility of a separate layer (`specs/010-historical-blob-backfill.md`), which reuses this module's client and Bronze row construction.
 
 The implementation must accept:
 
@@ -81,7 +81,7 @@ The historical range must not be permanently hard-coded.
 
 ## Daily Incremental Ingestion
 
-After backfill, ingestion runs as part of the daily Databricks workflow.
+Ongoing ingestion runs as part of the daily Databricks workflow.
 
 Normal execution reprocesses a rolling recent-date lookback window (initially 3 calendar days, configurable — same shape as ENTSO-E's, see Spec 006), not only the single latest completed weather day, using the Forecast API (not the Historical/Archive API — see "Source" above).
 
@@ -262,7 +262,7 @@ This specification is complete when:
 3. Daily mean temperature is retrieved.
 4. Daily mean wind speed is retrieved.
 5. Daily shortwave radiation sum is retrieved.
-6. A configurable 24-month historical backfill can be executed.
+6. The historical range can be ingested by the layer specified in `specs/010-historical-blob-backfill.md`.
 7. Recent dates are ingested via a configurable rolling lookback against the Forecast API, and the possibility of a later delta from lookback reprocessing is documented for Gold/dashboard consumers.
 8. Individual historical dates can be reprocessed.
 9. Data is persisted as Bronze Delta data.

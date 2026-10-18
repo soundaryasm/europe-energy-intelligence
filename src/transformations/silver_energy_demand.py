@@ -16,6 +16,7 @@ from src.transformations.dedupe import dedupe_latest
 from src.transformations.entsoe_silver_common import (
     interval_hours_udf,
     with_completeness_status,
+    with_preferred_resolution,
     with_local_date,
 )
 
@@ -44,16 +45,25 @@ def build_silver_energy_demand_daily(bronze_df: "DataFrame", country_timezones: 
     that local calendar day (Spec 003 "Demand Completeness") — a partial
     day's `daily_demand_mwh` is still computed here (for diagnosis) but
     Gold must not treat it as trusted (Spec 004 "Trusted Silver Inputs").
+
+    Each country-day resolves to a single resolution, hourly where it is
+    published (`with_preferred_resolution`), so a day is summed over one
+    coherent series rather than over two overlapping ones.
     """
     from pyspark.sql import functions as F
 
     load_only = bronze_df.filter(F.col("dataset_type") == "load")
-    deduped = dedupe_latest(load_only, key_cols=["country_code", "source_timestamp"])
+    deduped = dedupe_latest(
+        load_only, key_cols=["country_code", "source_timestamp", "source_resolution"],
+    )
     valid = deduped.filter(F.col("value") >= 0)
 
-    enriched = with_local_date(valid, country_timezones).withColumn(
-        "interval_hours", interval_hours_udf()(F.col("source_resolution"))
-    ).withColumn("energy_mwh", F.col("value") * F.col("interval_hours"))
+    enriched = (
+        with_local_date(valid, country_timezones)
+        .withColumn("interval_hours", interval_hours_udf()(F.col("source_resolution")))
+        .transform(with_preferred_resolution)
+        .withColumn("energy_mwh", F.col("value") * F.col("interval_hours"))
+    )
 
     aggregated = (
         enriched.groupBy("country_code", "local_date")

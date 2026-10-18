@@ -36,12 +36,8 @@ from src.ingestion.open_meteo_client import (
     SOURCE_ENDPOINT,
     SOURCE_ENDPOINT_FORECAST,
 )
-from src.ingestion.open_meteo_pipeline import (
-    backfill_date_range,
-    run_ingestion,
-)
+from src.ingestion.open_meteo_pipeline import run_ingestion
 from src.orchestration.processing_window import (
-    BACKFILL,
     DAILY,
     DEFAULT_OPEN_METEO_LOOKBACK_DAYS,
     VALID_EXECUTION_MODES,
@@ -51,8 +47,8 @@ from src.orchestration.processing_window import (
 # COMMAND ----------
 
 dbutils.widgets.dropdown("execution_mode", "daily", list(VALID_EXECUTION_MODES), "Execution mode")
-dbutils.widgets.text("start_date", "", "Start date (backfill/reprocess, YYYY-MM-DD)")
-dbutils.widgets.text("end_date", "", "End date (backfill/reprocess, YYYY-MM-DD)")
+dbutils.widgets.text("start_date", "", "Start date (reprocess, YYYY-MM-DD)")
+dbutils.widgets.text("end_date", "", "End date (reprocess, YYYY-MM-DD)")
 dbutils.widgets.text(
     "lookback_days", str(DEFAULT_OPEN_METEO_LOOKBACK_DAYS), "Daily-mode recent-date lookback (days)"
 )
@@ -67,13 +63,9 @@ lookback_days = int(dbutils.widgets.get("lookback_days"))
 explicit_start = date.fromisoformat(start_date_param) if start_date_param else None
 explicit_end = date.fromisoformat(end_date_param) if end_date_param else None
 
-# Spec 001: backfill defaults to the previous 24 months when no explicit
-# range is supplied, rather than requiring the operator to type it out.
-if execution_mode == BACKFILL and (explicit_start is None or explicit_end is None):
-    default_start, default_end = backfill_date_range(end_date=explicit_end)
-    explicit_start = explicit_start or default_start
-    explicit_end = explicit_end or default_end
-
+# `reprocess` requires both dates explicitly: re-running a range is a
+# deliberate, operator-chosen act, and a defaulted range is exactly the
+# kind of thing that gets run by accident against the wrong window.
 start_date, end_date = resolve_open_meteo_window(
     execution_mode, start_date=explicit_start, end_date=explicit_end, lookback_days=lookback_days
 )
@@ -82,8 +74,8 @@ start_date, end_date = resolve_open_meteo_window(
 
 # `daily` mode targets recent dates, which the Historical/Archive API
 # (ERA5 reanalysis) has not yet settled for — use the Forecast API
-# instead (operational models, refreshed every 1-6 hours). Backfill and
-# reprocess target older, already-settled dates, where Archive is right.
+# instead (operational models, refreshed every 1-6 hours). `reprocess`
+# targets older, already-settled dates, where Archive is right.
 if execution_mode == DAILY:
     endpoint_url, source_endpoint_label = OPEN_METEO_FORECAST_URL, SOURCE_ENDPOINT_FORECAST
 else:

@@ -51,8 +51,8 @@ from src.orchestration.processing_window import (
 # COMMAND ----------
 
 dbutils.widgets.dropdown("execution_mode", "daily", list(VALID_EXECUTION_MODES), "Execution mode")
-dbutils.widgets.text("start_date", "", "Start date (backfill/reprocess, YYYY-MM-DD)")
-dbutils.widgets.text("end_date", "", "End date (backfill/reprocess, YYYY-MM-DD)")
+dbutils.widgets.text("start_date", "", "Start date (reprocess, YYYY-MM-DD)")
+dbutils.widgets.text("end_date", "", "End date (reprocess, YYYY-MM-DD)")
 dbutils.widgets.text(
     "lookback_days", str(DEFAULT_ENTSOE_LOOKBACK_DAYS), "Daily-mode recent-date lookback (days)"
 )

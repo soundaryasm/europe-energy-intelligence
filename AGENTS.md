@@ -14,6 +14,8 @@ The platform ingests, processes, models, serves, and visualises daily energy dat
 
 ## Core Architecture
 
+Daily:
+
 External APIs
 → Databricks Bronze
 → Databricks Silver
@@ -21,9 +23,21 @@ External APIs
 → PostgreSQL
 → Power BI
 
+Historical:
+
+External APIs
+→ GitHub Actions
+→ Parquet in S3-compatible blob storage
+→ Databricks Bronze
+→ (the same Silver / Gold / PostgreSQL path as above)
+
 ## Runtime Constraints
 
-All ingestion, transformation, orchestration, and data-processing workloads MUST run on Databricks.
+All transformation and data-processing workloads MUST run on Databricks. Databricks remains the system of record and the only place Bronze, Silver and Gold are built.
+
+Daily ingestion also runs on Databricks.
+
+Historical ingestion runs on GitHub Actions and writes Parquet to blob storage, from where Databricks loads it into Bronze. It requires no Spark — it is HTTP requests, Parquet serialisation and an object-store write — and running it off-platform keeps a bounded Databricks compute allowance available for the daily pipeline. It reuses the same ingestion modules as the daily path rather than duplicating them. See `specs/010-historical-blob-backfill.md`.
 
 The local machine may only be used for:
 
@@ -97,13 +111,17 @@ Do not introduce hourly processing into the MVP unless a specification explicitl
 
 ## Historical Data
 
-The initial backfill covers the previous 24 months.
+Historical coverage starts at January 2015 and runs to the last complete calendar month.
 
-After backfill, pipelines perform daily incremental synchronisation.
+It is ingested by the layer in `specs/010-historical-blob-backfill.md`, one year per invocation, landing one Parquet file per source-month in blob storage. Databricks then loads those files into Bronze in a single pass.
+
+Alongside that, pipelines perform daily incremental synchronisation.
 
 Daily loads must be idempotent.
 
 Reprocessing the same date must not create duplicate records.
+
+Loading the same historical month twice must not create duplicate records.
 
 ## Data Sources
 

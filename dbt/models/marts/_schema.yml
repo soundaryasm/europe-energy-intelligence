@@ -30,8 +30,8 @@ models:
 
   - name: dim_date
     description: >
-      One row per calendar date covering the configured historical
-      backfill and future range (Spec 004; range set via dbt vars
+      One row per calendar date covering the configured historical and
+      future range (Spec 004; range set via dbt vars
       dim_date_start_date/dim_date_end_date in dbt_project.yml).
     columns:
       - name: date_key

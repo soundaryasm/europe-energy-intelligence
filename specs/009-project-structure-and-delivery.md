@@ -33,12 +33,17 @@ europe-energy-intelligence/
 │   ├── 006-daily-orchestration.md
 │   ├── 007-data-quality.md
 │   ├── 008-powerbi-model.md
-│   └── 009-project-structure-and-delivery.md
+│   ├── 009-project-structure-and-delivery.md
+│   └── 010-historical-blob-backfill.md
+│
+├── .github/
+│   └── workflows/
 │
 ├── src/
 │   ├── ingestion/
 │   ├── transformations/
 │   ├── orchestration/
+│   ├── blob/
 │   ├── serving/
 │   ├── config/
 │   └── quality/
@@ -48,6 +53,8 @@ europe-energy-intelligence/
 │   ├── transformations/
 │   ├── serving/
 │   └── exploration/
+│
+├── scripts/
 │
 ├── dbt/
 │   ├── models/
@@ -374,7 +381,7 @@ The final README should explain:
 - technology choices
 - Bronze/Silver/Gold flow
 - daily orchestration
-- historical backfill
+- historical range ingestion
 - recent-date reprocessing
 - dbt modelling
 - data quality
@@ -419,7 +426,7 @@ Also indicate:
 A reviewer should quickly be able to identify:
 
 - real public APIs
-- 24-month historical backfill
+- historical range ingestion
 - daily incremental processing
 - source revisions/lookback handling
 - medallion architecture
@@ -493,7 +500,7 @@ The MVP is complete when:
 
 1. Open-Meteo ingestion works on Databricks.
 2. ENTSO-E ingestion works on Databricks.
-3. 24 months of historical data can be backfilled.
+3. The historical range can be ingested.
 4. Daily incremental execution works.
 5. Recent ENTSO-E dates are reprocessed through the configured lookback.
 6. Bronze Delta datasets exist.

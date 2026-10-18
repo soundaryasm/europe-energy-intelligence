@@ -28,6 +28,7 @@ from src.transformations.dedupe import dedupe_latest
 from src.transformations.entsoe_silver_common import (
     interval_hours_udf,
     with_completeness_status,
+    with_preferred_resolution,
     with_local_date,
 )
 from src.transformations.production_types import get_production_type_info
@@ -89,7 +90,10 @@ def build_silver_generation_mix_daily(bronze_df: "DataFrame", country_timezones:
     )
     deduped = dedupe_latest(
         generation_only,
-        key_cols=["country_code", "source_timestamp", "production_type_raw", "business_type"],
+        key_cols=[
+            "country_code", "source_timestamp", "source_resolution",
+            "production_type_raw", "business_type",
+        ],
     )
     valid = deduped.filter(F.col("value") >= 0)
 
@@ -98,6 +102,10 @@ def build_silver_generation_mix_daily(bronze_df: "DataFrame", country_timezones:
     enriched = (
         with_local_date(valid, country_timezones)
         .withColumn("interval_hours", interval_hours_udf()(F.col("source_resolution")))
+        # Partitioned by country-day only, not by production type: every
+        # production type of a country-day shares one resolution, and
+        # partitioning finer would let a day mix resolutions across types.
+        .transform(with_preferred_resolution)
         .withColumn("generation_mwh_interval", F.col("value") * F.col("interval_hours"))
         .withColumn("_normalized", normalize_udf(F.col("production_type_raw")))
         .withColumn("normalized_production_type", F.col("_normalized.normalized_category"))

@@ -16,6 +16,7 @@ from src.transformations.dedupe import dedupe_latest
 from src.transformations.entsoe_silver_common import (
     interval_hours_udf,
     with_completeness_status,
+    with_preferred_resolution,
     with_local_date,
 )
 
@@ -38,9 +39,12 @@ SILVER_PRICE_COLUMNS = (
 def build_silver_energy_price_daily(bronze_df: "DataFrame", country_timezones: Dict[str, str]) -> "DataFrame":
     """Aggregate Bronze ENTSO-E price observations into `silver_energy_price_daily`.
 
-    The daily average is interval-duration-weighted (Spec 003), so mixed
-    15/30/60-minute resolutions within one day are not double- or
-    under-counted. Negative prices are valid and are never filtered out.
+    Each country-day resolves to a single resolution, hourly where it is
+    published (`with_preferred_resolution`), so a day is averaged over one
+    coherent series rather than over two overlapping ones. The daily
+    average is then interval-duration-weighted (Spec 003), so a day at
+    any resolution is neither double- nor under-counted. Negative prices
+    are valid and are never filtered out.
     `completeness_status` follows the same expected-timeline rule as
     demand (Spec 003 "Price Completeness") — Gold must not treat a
     `partial` day's average as a trusted complete daily metric.
@@ -48,11 +52,16 @@ def build_silver_energy_price_daily(bronze_df: "DataFrame", country_timezones: D
     from pyspark.sql import functions as F
 
     price_only = bronze_df.filter(F.col("dataset_type") == "price")
-    deduped = dedupe_latest(price_only, key_cols=["country_code", "source_timestamp"])
+    deduped = dedupe_latest(
+        price_only, key_cols=["country_code", "source_timestamp", "source_resolution"],
+    )
 
-    enriched = with_local_date(deduped, country_timezones).withColumn(
-        "interval_hours", interval_hours_udf()(F.col("source_resolution"))
-    ).withColumn("weighted_price", F.col("value") * F.col("interval_hours"))
+    enriched = (
+        with_local_date(deduped, country_timezones)
+        .withColumn("interval_hours", interval_hours_udf()(F.col("source_resolution")))
+        .transform(with_preferred_resolution)
+        .withColumn("weighted_price", F.col("value") * F.col("interval_hours"))
+    )
 
     aggregated = (
         enriched.groupBy("country_code", "local_date")

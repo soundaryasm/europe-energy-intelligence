@@ -88,6 +88,24 @@ Do not hard-code one expected resolution.
 
 Unsupported or malformed resolutions must fail validation rather than being silently interpreted.
 
+## Mixed Resolutions For One Instant
+
+ENTSO-E publishes some series at more than one resolution at the same time, with genuinely different values for the same instant: an hourly price and the price for the first quarter of that hour are two distinct observations, not two copies of one. This follows the day-ahead market's move to a 15-minute market time unit (SDAC, 30 September 2025).
+
+Bronze retains every resolution. Resolution is part of the ENTSO-E Bronze business key, so two resolutions for one instant cannot collide on write and silently lose one.
+
+Silver resolves each country-day to a single resolution, preferring hourly where it is published.
+
+Hourly is preferred by explicit decision: one grain across the whole history is easier to reason about than a series that changes grain partway through, and the hourly series covers every year of the historical range.
+
+Where a country-day has no hourly series, the finest resolution present is used instead. This fallback is required, not optional — most series have no hourly option at all (Irish load and generation publish at `PT30M`, German load and generation at `PT15M`), so a strict hourly filter would empty them entirely rather than change their grain.
+
+Selection is per country-day, not per instant, because the daily aggregations are interval-duration-weighted. A day mixing resolutions would double-count the instants that exist at both.
+
+No per-country or per-date switchover rule is maintained. Each day resolves on its own evidence.
+
+Accepted consequence: a day-ahead price can diverge from a zone's own settlement price once that zone clears at 15 minutes. Bronze retains the finer series, so revisiting this is a change in Silver and a rebuild, with no re-ingestion.
+
 ## Electricity Demand
 
 Source:
@@ -161,7 +179,7 @@ Normalize prices to:
 
 `EUR/MWh`
 
-Where source resolutions vary, calculate daily price using interval-duration weighting:
+Where source resolutions vary across days, calculate daily price using interval-duration weighting:
 
 `weighted_price = SUM(price × interval_duration) / SUM(interval_duration)`
 
@@ -511,6 +529,7 @@ This specification is complete when:
 1. ENTSO-E Point timestamps are correctly derived from their containing Period.
 2. UTC source timestamps are correctly mapped to country-local dates.
 3. Source resolutions are converted into correct interval durations.
+4. Where one instant carries more than one resolution, Bronze retains all of them and Silver resolves each country-day to a single resolution, preferring hourly and falling back to the finest present.
 4. Load MW values are correctly converted into MWh.
 5. Complete daily demand is calculated correctly.
 6. Partial demand days are not presented as complete trusted metrics.

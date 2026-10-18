@@ -21,9 +21,11 @@ clean-targets:
 vars:
   # Historical coverage for dim_date. Parameterized, not hard-coded
   # in SQL, so it can be widened without editing the model (Spec 004
-  # "dim_date... should cover at least the full historical backfill
-  # range and ongoing future daily loads").
-  dim_date_start_date: "2022-01-01"
+  # "dim_date... should cover at least the full historical range and
+  # ongoing future daily loads"). The start matches the earliest month
+  # the historical layer covers (Spec 010) — a fact row with no matching
+  # dim_date would fail the relationship tests in marts/_schema.yml.
+  dim_date_start_date: "2015-01-01"
   dim_date_end_date: "2027-12-31"
 
 models:

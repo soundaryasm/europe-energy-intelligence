@@ -8,14 +8,12 @@
 # MAGIC
 # MAGIC Deliberately dumb/simple by design: there is no execution_mode and no
 # MAGIC date-range concept here, unlike ENTSO-E/Open-Meteo. This always fetches
-# MAGIC exactly one calendar year for every configured country. The daily
-# MAGIC pipeline should pass the current year; a future backfill run should
-# MAGIC pass whichever year the backfill month falls in — the year to fetch is
-# MAGIC derived from whatever period is already being processed elsewhere,
-# MAGIC not tracked separately here. Re-fetching the same year repeatedly
-# MAGIC (once a day, or many times during a backfill covering several months
-# MAGIC of the same year) is expected and cheap — no rate limit is documented
-# MAGIC for the World Bank API, and idempotent Bronze MERGE makes reruns safe.
+# MAGIC exactly one calendar year for every configured country, which the daily
+# MAGIC pipeline passes as the current year — the year to fetch is derived from
+# MAGIC whatever period is already being processed elsewhere, not tracked
+# MAGIC separately here. Re-fetching the same year once a day is expected and
+# MAGIC cheap: no rate limit is documented for the World Bank API, and
+# MAGIC idempotent Bronze MERGE makes reruns safe.
 # MAGIC
 # MAGIC This notebook must be executed on Databricks — it relies on `spark`,
 # MAGIC which only exists in a Databricks notebook runtime.

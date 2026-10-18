@@ -138,7 +138,7 @@ Grain:
 
 The dimension must cover at least:
 
-- the complete 24-month historical backfill
+- the complete historical range
 - all dates subsequently processed by the daily pipeline
 
 Required fields:

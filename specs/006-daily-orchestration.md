@@ -137,17 +137,11 @@ Normal scheduled execution.
 
 Uses the configured recent-date lookback.
 
-### backfill
-
-Processes an explicitly supplied historical range.
-
-Used for the initial 24-month history and controlled historical reloads.
-
 ### reprocess
 
 Processes an explicitly supplied date or date range for correction/debugging.
 
-The same underlying implementation should support all three modes.
+The same underlying implementation supports both modes.
 
 Do not maintain separate duplicate pipeline implementations.
 
@@ -310,38 +304,20 @@ This includes:
 
 Retries or manual reruns must not create duplicate logical records.
 
-## Historical Backfill
+## Historical Range
 
-Historical backfill must reuse the same source-specific ingestion and transformation code used by the daily workflow.
+Historical ingestion is out of scope for this workflow. It is a separate layer with its own orchestration, specified in `specs/010-historical-blob-backfill.md`, and it shares the same source-specific ingestion code rather than duplicating it.
 
-The initial backfill covers:
+This workflow is responsible only for the recent-date window. The normal 02:00 scheduled run must never process a full historical range.
 
-`previous 24 months`
+Where a correction to older dates is needed from this workflow, it is invoked as:
 
-Backfill should be explicitly invoked using:
-
-`execution_mode = backfill`
+`execution_mode = reprocess`
 
 with supplied:
 
 - `start_date`
 - `end_date`
-
-The normal 02:00 scheduled run must never accidentally trigger a full historical backfill.
-
-## Backfill Chunking
-
-Large historical source ranges should be processed in bounded chunks as defined by the ingestion specifications.
-
-Orchestration may iterate through:
-
-- months
-- weeks
-- another approved bounded period
-
-depending on API behaviour.
-
-A backfill failure should make the failed range identifiable and rerunnable.
 
 ## Reprocessing
 
@@ -423,7 +399,6 @@ Manual execution is required for:
 
 - development
 - debugging
-- backfill
 - reprocessing
 - validating configuration changes
 
@@ -526,7 +501,6 @@ Databricks execution history must remain sufficient to inspect:
 - failed runs
 - retries
 - manual runs
-- backfills
 - reprocessing runs
 
 Do not build a separate orchestration database for the MVP.
@@ -553,10 +527,10 @@ This specification is complete when:
 3. Open-Meteo and ENTSO-E ingestion are separate tasks.
 4. ENTSO-E normal daily execution uses a configurable recent-date lookback.
 5. The initial ENTSO-E lookback is three calendar days.
-6. Open-Meteo normal daily execution uses a configurable recent-date lookback (initially three calendar days) against the Forecast API, not the Historical/Archive API; backfill/reprocess of older dates use the Historical/Archive API.
+6. Open-Meteo normal daily execution uses a configurable recent-date lookback (initially three calendar days) against the Forecast API, not the Historical/Archive API; reprocessing of older dates uses the Historical/Archive API.
 6a. The possibility of a small delta appearing later for a recent date's weather (or ENTSO-E) metric, due to lookback reprocessing, is documented for anyone consuming the Gold/dashboard data — not left as a silent, unexplained behavior.
 7. A canonical processing window is passed between tasks.
-8. Daily, backfill, and reprocess execution modes are supported.
+8. Daily and reprocess execution modes are supported.
 9. Task dependencies enforce correct execution order.
 10. Silver does not run after required ingestion task failure.
 11. dbt does not run after Silver failure.
@@ -564,7 +538,7 @@ This specification is complete when:
 13. Partial ENTSO-E data remains distinguishable from technical pipeline failure.
 14. Transient failures use bounded retries.
 15. Every pipeline stage remains idempotent.
-16. Historical backfill reuses the same core implementation.
+16. Historical ingestion reuses the same core implementation (`specs/010-historical-blob-backfill.md`).
 17. Manual date-range reprocessing is supported.
 18. Affected recent dates are republished when source revisions occur.
 19. Execution state and failures are visible through Databricks.

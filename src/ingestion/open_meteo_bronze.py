@@ -37,8 +37,8 @@ def build_bronze_records(
 
     `source_endpoint` records which Open-Meteo API actually produced this
     row (`SOURCE_ENDPOINT` for the Historical/Archive API used for
-    backfill, `SOURCE_ENDPOINT_FORECAST` for the Forecast API used for
-    recent/daily dates) — the two can return a slightly different value
+    settled historical dates, `SOURCE_ENDPOINT_FORECAST` for the Forecast
+    API used for recent/daily dates) — the two can return a slightly different value
     for the same date, since Forecast's operational-model estimate for a
     recent day is provisional in a different sense than Archive's
     ERA5-reanalysis value is. Recording provenance lets that be traced

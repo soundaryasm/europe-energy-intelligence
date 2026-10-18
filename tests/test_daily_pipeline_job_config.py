@@ -43,12 +43,12 @@ def test_job_schedule_is_02_00_utc():
     assert job["schedule"]["quartz_cron_expression"] == "0 0 2 * * ?"
 
 
-def test_job_supports_daily_backfill_reprocess_parameters():
+def test_job_supports_daily_and_reprocess_parameters():
     job = _load_job()
     param_names = {p["name"] for p in job["parameters"]}
     assert {"execution_mode", "start_date", "end_date", "lookback_days"} <= param_names
     mode_param = next(p for p in job["parameters"] if p["name"] == "execution_mode")
-    assert mode_param["default"] == "daily"  # scheduled runs never default to backfill
+    assert mode_param["default"] == "daily"  # scheduled runs never default to reprocess
 
 
 def test_entsoe_task_receives_the_canonical_lookback_days_parameter():

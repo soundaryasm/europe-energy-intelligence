@@ -33,9 +33,9 @@ def test_open_meteo_daily_mode_rejects_non_positive_lookback():
         resolve_open_meteo_window("daily", lookback_days=0, reference_date=REFERENCE)
 
 
-def test_open_meteo_backfill_mode_uses_explicit_range():
+def test_open_meteo_reprocess_mode_uses_explicit_range():
     start, end = resolve_open_meteo_window(
-        "backfill", start_date=date(2024, 1, 1), end_date=date(2024, 12, 31)
+        "reprocess", start_date=date(2024, 1, 1), end_date=date(2024, 12, 31)
     )
     assert (start, end) == (date(2024, 1, 1), date(2024, 12, 31))
 
@@ -47,9 +47,9 @@ def test_open_meteo_reprocess_mode_uses_explicit_range():
     assert (start, end) == (date(2026, 8, 1), date(2026, 8, 3))
 
 
-def test_open_meteo_backfill_without_explicit_dates_raises():
+def test_open_meteo_reprocess_without_explicit_dates_raises():
     with pytest.raises(ProcessingWindowError):
-        resolve_open_meteo_window("backfill")
+        resolve_open_meteo_window("reprocess")
 
 
 def test_unsupported_execution_mode_raises():
@@ -73,9 +73,9 @@ def test_entsoe_daily_mode_rejects_non_positive_lookback():
         resolve_entsoe_window("daily", lookback_days=0, reference_date=REFERENCE)
 
 
-def test_entsoe_backfill_mode_uses_explicit_range():
+def test_entsoe_reprocess_mode_uses_explicit_range():
     start, end = resolve_entsoe_window(
-        "backfill", start_date=date(2024, 1, 1), end_date=date(2024, 12, 31)
+        "reprocess", start_date=date(2024, 1, 1), end_date=date(2024, 12, 31)
     )
     assert (start, end) == (date(2024, 1, 1), date(2024, 12, 31))
 
@@ -87,4 +87,4 @@ def test_entsoe_reprocess_without_explicit_dates_raises():
 
 def test_entsoe_start_after_end_raises():
     with pytest.raises(ProcessingWindowError):
-        resolve_entsoe_window("backfill", start_date=date(2024, 6, 1), end_date=date(2024, 1, 1))
+        resolve_entsoe_window("reprocess", start_date=date(2024, 6, 1), end_date=date(2024, 1, 1))

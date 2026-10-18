@@ -1,10 +1,11 @@
 """Shared ENTSO-E Silver helpers: local-date bucketing, interval-hours,
-and daily-timeline completeness classification (Spec 003).
+resolution selection, and daily-timeline completeness classification
+(Spec 003).
 
-Centralizes local-date bucketing, interval-duration conversion, and
-completeness classification exactly once, reused by the demand, price,
-and generation-mix Silver builders instead of being copy-pasted three
-times. PySpark is imported lazily inside function bodies so this module
+Centralizes local-date bucketing, interval-duration conversion,
+resolution selection, and completeness classification exactly once,
+reused by the demand, price, and generation-mix Silver builders instead
+of being copy-pasted three times. PySpark is imported lazily inside function bodies so this module
 stays importable without a PySpark installation, per the project's
 Databricks-only runtime rule.
 """
@@ -38,6 +39,70 @@ def interval_hours_udf():
         return parse_iso8601_duration_minutes(resolution) / 60.0
 
     return F.udf(_hours, DoubleType())
+
+
+# ENTSO-E's hourly resolution code. Preferred where a country-day
+# offers a choice — see `with_preferred_resolution`.
+HOURLY_RESOLUTION = "PT60M"
+
+# Hours per interval at the hourly resolution, used to identify those
+# rows after `interval_hours_udf` has already been applied.
+_HOURLY_INTERVAL_HOURS = 1.0
+
+
+def with_preferred_resolution(df: "DataFrame", *, extra_partition_cols=()) -> "DataFrame":
+    """Reduce each country-day to a single resolution.
+
+    ENTSO-E publishes some series at more than one resolution at once,
+    with genuinely different values for the same instant: an hourly
+    price and the price for the first quarter of that hour are two
+    distinct observations, not two copies of one. This follows the
+    day-ahead market's move to a 15-minute market time unit (SDAC,
+    30 September 2025). Bronze keeps every resolution, so the choice of
+    which to model is made here rather than by whichever row won a
+    merge.
+
+    Hourly wins where a country-day offers it, by explicit decision: one
+    grain across the whole history is easier to reason about than a
+    series that changes grain partway through, and the hourly series
+    covers every year back to the start of the historical range.
+
+    Where a country-day has no hourly series it falls back to the finest
+    resolution present. That fallback is not a nicety — most series have
+    no hourly option at all (Irish load and generation publish at
+    PT30M, German load and generation at PT15M), so a strict hourly
+    filter would empty them entirely rather than switch their grain.
+
+    Selection is per country-day, not per instant, because the
+    aggregations downstream are interval-duration-weighted. Mixing
+    resolutions inside one day would double-count the instants that
+    exist at both — an hourly 22:00 contributing a full hour alongside a
+    15-minute 22:00 contributing a quarter of one.
+
+    Note that the hourly preference means a day-ahead price can diverge
+    from the market's own settlement price once a zone has moved to
+    15-minute clearing. That is accepted for now; Bronze retains the
+    finer series, so revisiting the decision is a change here and a
+    Silver rebuild, with no re-ingestion.
+
+    Requires `local_date` and `interval_hours` to already be present.
+    """
+    from pyspark.sql import Window
+    from pyspark.sql import functions as F
+
+    partition = Window.partitionBy("country_code", "local_date", *extra_partition_cols)
+    is_hourly = F.col("interval_hours") == F.lit(_HOURLY_INTERVAL_HOURS)
+
+    return (
+        df.withColumn("_has_hourly", F.max(is_hourly.cast("int")).over(partition))
+        .withColumn("_finest_interval_hours", F.min("interval_hours").over(partition))
+        .filter(
+            F.when(F.col("_has_hourly") == 1, is_hourly).otherwise(
+                F.col("interval_hours") == F.col("_finest_interval_hours")
+            )
+        )
+        .drop("_has_hourly", "_finest_interval_hours")
+    )
 
 
 def with_local_date(df: "DataFrame", country_timezones: Dict[str, str]) -> "DataFrame":

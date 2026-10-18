@@ -39,7 +39,6 @@ from src.orchestration.processing_window import latest_completed_date
 logger = logging.getLogger(__name__)
 
 BRONZE_TABLE_NAME = "bronze_open_meteo_weather"
-DEFAULT_BACKFILL_MONTHS = 24
 _DAYS_PER_MONTH_APPROX = 30
 DEFAULT_MAX_WORKERS = 5
 DEFAULT_CIRCUIT_BREAKER_THRESHOLD = 3
@@ -69,27 +68,10 @@ def daily_processing_date(reference_date: Optional[date] = None) -> date:
 
     Delegates to the canonical `processing_window.latest_completed_date`
     (Spec 006 "Canonical Processing Window") so this single "yesterday"
-    rule has one implementation, reused by both the backfill default
-    below and the daily/backfill/reprocess notebook entry points.
+    rule has one implementation, reused by every notebook entry point
+    rather than recomputed per caller.
     """
     return latest_completed_date(reference_date)
-
-
-def backfill_date_range(
-    months: int = DEFAULT_BACKFILL_MONTHS,
-    end_date: Optional[date] = None,
-) -> Tuple[date, date]:
-    """Return a configurable (start_date, end_date) historical backfill window.
-
-    `months` and `end_date` are parameters rather than constants so the
-    same ingestion code serves both historical backfill and daily
-    incremental execution, per Spec 001.
-    """
-    if months <= 0:
-        raise ValueError("months must be a positive integer")
-    resolved_end = end_date or daily_processing_date()
-    start = resolved_end - timedelta(days=months * _DAYS_PER_MONTH_APPROX)
-    return start, resolved_end
 
 
 def _default_spark_writer(spark, records: List[dict], table_name: str) -> int:
@@ -214,8 +196,8 @@ def run_ingestion(
     """Ingest Open-Meteo Bronze weather data for every configured country.
 
     `endpoint_url`/`source_endpoint_label` default to the Historical/
-    Archive API (settled data, right for backfill/reprocess of older
-    dates). The daily ingestion notebook instead passes
+    Archive API (settled data, right for reprocessing older dates).
+    The daily ingestion notebook instead passes
     `OPEN_METEO_FORECAST_URL`/`SOURCE_ENDPOINT_FORECAST` for recent dates
     — see `open_meteo_client` for why the two APIs aren't interchangeable
     for recent dates.

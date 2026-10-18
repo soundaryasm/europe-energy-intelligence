@@ -1,0 +1,121 @@
+# Historical Bronze load job definition (Spec 010).
+#
+# Loads the Parquet files the historical ingestion landed in blob storage
+# into Bronze, then rebuilds Silver and Gold over the widened history and
+# republishes the serving layer.
+#
+# No schedule: this runs once, by hand, after the historical ingestion
+# reports that every month back to January 2015 is accounted for. A
+# schedule would be wrong twice over — there is nothing recurring to do,
+# and the Silver/Gold rebuild over a decade of history is the most
+# expensive single run in the project.
+#
+# Safe to re-run. The Bronze load merges on each table's business key, so
+# a month already present is updated in place rather than duplicated,
+# and Silver/Gold rebuild from Bronze on every run regardless.
+
+variables:
+  sql_warehouse_id:
+    description: "Databricks SQL Warehouse ID used by the build_dbt_gold task."
+  postgres_secret_scope:
+    description: "Databricks secret scope holding PostgreSQL credentials."
+    default: europe-energy-intelligence
+  blob_secret_scope:
+    description: "Databricks secret scope holding the blob bucket token."
+    default: europe-energy-intelligence
+
+resources:
+  jobs:
+    europe_energy_intelligence_historical_load:
+      name: "European Energy Intelligence - Historical Load"
+
+      parameters:
+        - name: sources
+          default: ""
+
+      environments:
+        - environment_key: python_notebook_env
+          spec:
+            environment_version: "5"
+            dependencies:
+              - -r ${workspace.file_path}/requirements.txt
+        # Separate from python_notebook_env rather than adding
+        # dbt-databricks to the shared one: it pulls in its own large
+        # dependency set (dbt-core, jinja2, etc.) that only build_dbt_gold
+        # needs, and a serverless task's `libraries` field is rejected at
+        # submit time ("Libraries field is not supported for serverless
+        # task, please specify libraries in environment") — confirmed via
+        # a real one-time run — so this can't just be a task-level
+        # `libraries: [...]` entry either.
+        - environment_key: dbt_env
+          spec:
+            environment_version: "5"
+            dependencies:
+              - dbt-databricks==1.8.5
+
+      tasks:
+        - task_key: load_historical
+          environment_key: python_notebook_env
+          notebook_task:
+            notebook_path: "${workspace.file_path}/notebooks/ingestion/load_historical_from_blob"
+            base_parameters:
+              secret_scope: "${var.blob_secret_scope}"
+              secret_key: "UPSTASH_BLOB_TOKEN"
+              sources: "{{job.parameters.sources}}"
+              # See the notebook's own sys.path bootstrap comment for why.
+              bundle_root: "${workspace.file_path}"
+          # Generous relative to the other jobs: this reads and merges
+          # every month of history in one pass, where a daily task only
+          # ever touches a three-day window.
+          timeout_seconds: 10800
+          # No task-level retry. A failure here needs looking at before
+          # being repeated — the load reports which files failed, and
+          # re-running after a blind retry just re-merges everything
+          # that already succeeded.
+
+        - task_key: transform_silver
+          environment_key: python_notebook_env
+          depends_on:
+            - task_key: load_historical
+          notebook_task:
+            notebook_path: "${workspace.file_path}/notebooks/transformations/transform_silver"
+            base_parameters:
+              bundle_root: "${workspace.file_path}"
+          timeout_seconds: 10800
+
+        - task_key: build_dbt_gold
+          environment_key: dbt_env
+          depends_on:
+            - task_key: transform_silver
+          dbt_task:
+            project_directory: "${workspace.file_path}/dbt"
+            # Explicit, not left to default: the dbt_task type defaults
+            # catalog to the workspace default and schema to `default`
+            # when unset — Gold must land in workspace.gold specifically,
+            # since publish_postgres reads from gold_catalog=workspace.gold.
+            catalog: "workspace"
+            schema: "gold"
+            commands:
+              - "dbt deps"
+              - "dbt seed"
+              - "dbt run"
+              - "dbt test"
+            warehouse_id: "${var.sql_warehouse_id}"
+          timeout_seconds: 10800
+
+        # Spec 007 data-quality gate: publish only runs if dbt (and its
+        # tests) succeeded — a failed/known-invalid Gold build never
+        # reaches the serving layer.
+        - task_key: publish_postgres
+          environment_key: python_notebook_env
+          depends_on:
+            - task_key: build_dbt_gold
+          notebook_task:
+            notebook_path: "${workspace.file_path}/notebooks/serving/publish_postgres"
+            base_parameters:
+              gold_catalog: "workspace.gold" # matches the validated Gold location (Unity Catalog "workspace" catalog, "gold" schema)
+              secret_scope: "${var.postgres_secret_scope}"
+              bundle_root: "${workspace.file_path}"
+          timeout_seconds: 7200
+
+      email_notifications: {}

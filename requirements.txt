@@ -8,4 +8,10 @@ databricks-sdk
 # Plain psycopg binds to the system libpq instead - confirmed working
 # against a real Aiven Postgres connection on Databricks Serverless.
 psycopg
+# Parquet read/write for the historical blob layer, and the
+# S3-compatible client it reads and writes through. Both are needed on
+# Databricks (the Bronze load reads these files) and in CI (the
+# historical ingestion writes them).
+pyarrow
+boto3
 pytest

@@ -1,0 +1,67 @@
+# Historical ingestion into blob storage (Spec 010).
+#
+# Each run resolves one year and exits, walking backwards from the last
+# complete month to January 2015. The schedule supplies the repetition;
+# a run that finds nothing left to resolve exits immediately, so the
+# schedule costs one short no-op per fire once the history is complete.
+#
+# Every two hours on odd hours, 01:00 through 23:00. GitHub Actions
+# evaluates cron in UTC, which is what every schedule in this project
+# uses.
+#
+# Two hours is what the worst case needs rather than the typical one: a
+# year is ~2,700 ENTSO-E requests, normally ~15 minutes, but every
+# request carries a 3-attempt retry with exponential backoff and a 30s
+# read timeout, so a degraded upstream can stretch a year past an hour.
+# Spacing wider than that worst case is what keeps runs from
+# overlapping; `concurrency` below enforces it regardless.
+#
+# Odd hours rather than even so nothing fires at 00:00, where scheduled
+# workloads bunch up across the platform and a fire is most likely to be
+# delayed or dropped.
+name: Historical backfill
+
+on:
+  schedule:
+    - cron: "0 1-23/2 * * *"
+  workflow_dispatch:
+
+# ENTSO-E rate-limits per token as well as per IP, and this workflow
+# holds the only token. Two runs fetching at once would share that
+# budget and risk the 10-minute ban that follows exceeding it, so runs
+# are serialised rather than queued-and-overlapped.
+concurrency:
+  group: historical-backfill
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  resolve-year:
+    runs-on: ubuntu-latest
+    # Above the worst-case year, below the 6-hour default: a hung run
+    # should die rather than consume the monthly minute allowance.
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # The ingestion modules and the Parquet writer only; the Spark and
+      # dbt dependencies in requirements.txt are not needed here and are
+      # not installed.
+      - name: Install dependencies
+        run: pip install requests pyyaml tenacity pyarrow boto3
+
+      - name: Resolve one year
+        env:
+          ENTSOE_API_TOKEN: ${{ secrets.ENTSOE_API_TOKEN }}
+          # Exchanged inside the store for short-lived S3 credentials,
+          # re-minted as the run proceeds.
+          UPSTASH_BLOB_TOKEN: ${{ secrets.UPSTASH_BLOB_TOKEN }}
+        run: python scripts/run_blob_backfill.py

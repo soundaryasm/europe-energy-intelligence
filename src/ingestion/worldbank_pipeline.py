@@ -1,7 +1,7 @@
 """World Bank Bronze ingestion orchestration for the MVP countries.
 
 Deliberately dumb/simple, by explicit design decision: this pipeline has
-no execution_mode, no lookback window, and no backfill date-range concept
+no execution_mode, no lookback window, and no date-range concept
 of its own — it always fetches exactly one calendar year, for every
 configured country, across a fixed small set of indicators. One call per
 indicator (World Bank's semicolon-separated country list covers every
@@ -9,11 +9,10 @@ country in that single call), so 4 indicators = 4 HTTP calls total,
 regardless of country count.
 
 Idempotent by the same Bronze MERGE mechanism as the other two sources,
-so re-fetching the same year on every daily run (and again on every
-backfill run that happens to target a month within that year) is
-expected and cheap, not wasteful — no rate limit is documented for the
-World Bank API, and even a full year's worth of country data across all
-four indicators is a handful of small requests.
+so re-fetching the same year on every daily run is expected and cheap,
+not wasteful — no rate limit is documented for the World Bank API, and
+even a full year's worth of country data across all four indicators is a
+handful of small requests.
 
 This module MUST only be executed on Databricks for its Spark write path
 (`_default_spark_writer`), imported lazily inside the function body so

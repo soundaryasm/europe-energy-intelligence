@@ -693,7 +693,7 @@ The pipeline must allow the trusted Silver, Gold, and PostgreSQL state for that 
 
 ## Historical Backfill
 
-All quality rules also apply to the 24-month historical backfill.
+All quality rules also apply to the historical range.
 
 Backfill must not bypass:
 

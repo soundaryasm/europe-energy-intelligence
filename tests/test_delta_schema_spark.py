@@ -10,15 +10,49 @@ pytest.importorskip("pyspark")
 
 from src.ingestion.delta_schema import (
     DuplicateKeyError,
+    ENTSOE_BRONZE_FIELDS,
     ENTSOE_BRONZE_KEY_COLS,
+    OPEN_METEO_BRONZE_FIELDS,
     SchemaMismatchError,
+    WORLDBANK_BRONZE_FIELDS,
     assert_unique_keys,
     ensure_schema_compatible,
     entsoe_bronze_schema,
     open_meteo_bronze_schema,
+    worldbank_bronze_schema,
 )
 
 pytestmark = pytest.mark.databricks
+
+_SCHEMA_CASES = (
+    (entsoe_bronze_schema, ENTSOE_BRONZE_FIELDS),
+    (open_meteo_bronze_schema, OPEN_METEO_BRONZE_FIELDS),
+    (worldbank_bronze_schema, WORLDBANK_BRONZE_FIELDS),
+)
+
+
+@pytest.mark.parametrize("schema_fn,fields", _SCHEMA_CASES)
+def test_spark_schema_matches_the_field_definitions(schema_fn, fields):
+    """The Spark and Arrow schemas are derived from the same field
+    definitions, so a drift between the definitions and what Spark
+    actually produces would let a Parquet file be written that the
+    Bronze merge then rejects on type."""
+    schema = schema_fn()
+
+    assert [f.name for f in schema.fields] == [name for name, _, _ in fields]
+    assert [f.nullable for f in schema.fields] == [nullable for _, _, nullable in fields]
+
+
+@pytest.mark.parametrize("schema_fn,fields", _SCHEMA_CASES)
+def test_spark_types_match_the_declared_logical_types(schema_fn, fields):
+    expected = {
+        "string": "StringType", "double": "DoubleType",
+        "int": "IntegerType", "long": "LongType",
+    }
+    schema = schema_fn()
+
+    for field, (_, type_name, _) in zip(schema.fields, fields):
+        assert type(field.dataType).__name__ == expected[type_name]
 
 
 def test_ensure_schema_compatible_accepts_identical_schema():

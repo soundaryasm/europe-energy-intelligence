@@ -6,7 +6,7 @@ Ingest European electricity-market data from the ENTSO-E Transparency Platform i
 
 The pipeline must support:
 
-- 24-month historical backfill
+- historical range ingestion
 - daily incremental ingestion
 - recent-date reprocessing
 - safe reruns
@@ -87,7 +87,7 @@ Source timestamps, price values, currency, and units must be preserved.
 
 ## Historical Backfill
 
-Support a configurable historical backfill covering the previous 24 months.
+Support historical range ingestion by the layer specified in `specs/010-historical-blob-backfill.md`, which reuses this module's client, XML parsing and Bronze row construction.
 
 The implementation must accept:
 
@@ -106,7 +106,7 @@ Do not assume every dataset supports arbitrarily large query windows.
 
 ## Daily Incremental Ingestion
 
-After historical backfill, the production workflow runs daily.
+Alongside historical ingestion, the production workflow runs daily.
 
 Normal incremental execution should process recent completed dates rather than permanently assuming only one date can ever be re-read.
 
@@ -387,7 +387,7 @@ This specification is complete when:
 3. Actual total load can be ingested.
 4. Actual generation by production type can be ingested.
 5. Day-ahead prices can be ingested.
-6. A configurable 24-month historical backfill can be executed.
+6. The historical range can be ingested by the layer specified in `specs/010-historical-blob-backfill.md`.
 7. Recent dates can be reprocessed safely.
 8. Source data is stored as Bronze Delta data.
 9. Source timestamps and resolutions are preserved.

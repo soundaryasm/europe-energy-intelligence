@@ -17,7 +17,7 @@ on automatic schema evolution at all, on any environment:
   instead of silently altering a production table.
 - Adding/removing a column (e.g. `business_type`) is a deliberate,
   one-time migration applied out-of-band (see `docs/migrations/`), not
-  something a daily/backfill/reprocess run does on the fly.
+  something a daily/reprocess run or the historical load does on the fly.
 """
 from __future__ import annotations
 
@@ -33,13 +33,23 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, no runtime import
 # of truth so the two can never drift apart (drift here is exactly what
 # would make the post-dedupe uniqueness check in
 # `write_with_deterministic_schema` meaningless).
+# `source_resolution` is part of the key, not merely a payload column.
+# Since the day-ahead market moved to a 15-minute market time unit
+# (SDAC, 30 September 2025), ENTSO-E publishes the same instant at more
+# than one resolution, with genuinely different values: an hourly price
+# and the price for the first quarter of that hour are two distinct
+# observations, not two copies of one. Without resolution in the key
+# they collide on the MERGE and one is silently discarded, with nothing
+# to break the tie — every row in a batch shares an
+# `ingestion_timestamp`. Both are kept here, and the choice of which to
+# use is made once in Silver (`entsoe_silver_common.with_preferred_resolution`)
+# rather than left to whichever row happened to win a merge.
 ENTSOE_BRONZE_KEY_COLS = (
-    "country_code", "dataset_type", "source_timestamp",
+    "country_code", "dataset_type", "source_timestamp", "source_resolution",
     "production_type_raw", "business_type",
 )
 OPEN_METEO_BRONZE_KEY_COLS = ("country_code", "source_variable", "observation_date")
 WORLDBANK_BRONZE_KEY_COLS = ("country_code", "indicator_code", "year")
-BACKFILL_CHECKPOINT_KEY_COLS = ("source", "country_code", "dataset", "month_start")
 
 
 class SchemaMismatchError(Exception):
@@ -63,6 +73,91 @@ class DuplicateKeyError(Exception):
     """
 
 
+# Bronze field definitions, declared without importing PySpark.
+#
+# Each Bronze table's columns are defined once, here, as (name, type,
+# nullable) triples using the logical type names in `_LOGICAL_TYPES`.
+# Both representations the project needs are derived from these same
+# triples: the Spark `StructType` used for the Delta write
+# (`*_bronze_schema()`) and the Arrow schema used for the Parquet write
+# (`src.blob.writer.arrow_schema`). Declaring the columns in a
+# PySpark-free form is what lets the Parquet path run where PySpark is
+# not installed, while keeping one source of truth for the column set,
+# ordering and nullability — the same reasoning that put the merge keys
+# in this module rather than beside each writer.
+ENTSOE_BRONZE_FIELDS = (
+    ("country_code", "string", False),
+    ("domain", "string", False),
+    ("dataset_type", "string", False),
+    ("source_timestamp", "string", False),
+    ("source_resolution", "string", False),
+    ("value", "double", False),
+    ("unit", "string", True),
+    ("production_type_raw", "string", True),
+    ("business_type", "string", True),
+    ("currency", "string", True),
+    ("source_document_mrid", "string", True),
+    ("requested_start_date", "string", False),
+    ("requested_end_date", "string", False),
+    ("source_system", "string", False),
+    ("ingestion_timestamp", "string", False),
+)
+
+OPEN_METEO_BRONZE_FIELDS = (
+    ("country_code", "string", False),
+    ("country_name", "string", False),
+    ("reference_location", "string", False),
+    ("latitude", "double", False),
+    ("longitude", "double", False),
+    ("timezone", "string", False),
+    ("returned_latitude", "double", True),
+    ("returned_longitude", "double", True),
+    ("returned_timezone", "string", True),
+    # `long`, not `int`, to match what every real table already holds —
+    # confirmed via `DESCRIBE TABLE bronze_open_meteo_weather` showing
+    # `bigint`. Not a value-range requirement.
+    ("utc_offset_seconds", "long", True),
+    ("observation_date", "string", False),
+    ("source_variable", "string", False),
+    ("source_value", "double", True),
+    ("source_unit", "string", True),
+    ("source_endpoint", "string", False),
+    ("source_system", "string", False),
+    ("ingestion_timestamp", "string", False),
+)
+
+WORLDBANK_BRONZE_FIELDS = (
+    ("country_code", "string", False),
+    ("country_name", "string", False),
+    ("indicator_code", "string", False),
+    ("indicator_name", "string", False),
+    ("year", "int", False),
+    # Nullable — World Bank can list a country/indicator/year with a
+    # `null` value.
+    ("value", "double", True),
+    ("source_system", "string", False),
+    ("ingestion_timestamp", "string", False),
+)
+
+
+def _struct_type(fields: Sequence[tuple]) -> "StructType":
+    """Build a Spark `StructType` from `(name, type, nullable)` triples."""
+    from pyspark.sql.types import (
+        DoubleType, IntegerType, LongType, StringType, StructField, StructType,
+    )
+
+    spark_types = {
+        "string": StringType, "double": DoubleType,
+        "int": IntegerType, "long": LongType,
+    }
+    return StructType(
+        [
+            StructField(name, spark_types[type_name](), nullable)
+            for name, type_name, nullable in fields
+        ]
+    )
+
+
 def entsoe_bronze_schema() -> "StructType":
     """Application-owned schema for `bronze_entsoe_energy` (Spec 002).
 
@@ -70,114 +165,23 @@ def entsoe_bronze_schema() -> "StructType":
     `business_type` was added after this table was first created in some
     environments — see `docs/migrations/001_entsoe_bronze_add_business_type.sql`.
     """
-    from pyspark.sql.types import DoubleType, StringType, StructField, StructType
-
-    return StructType(
-        [
-            StructField("country_code", StringType(), False),
-            StructField("domain", StringType(), False),
-            StructField("dataset_type", StringType(), False),
-            StructField("source_timestamp", StringType(), False),
-            StructField("source_resolution", StringType(), False),
-            StructField("value", DoubleType(), False),
-            StructField("unit", StringType(), True),
-            StructField("production_type_raw", StringType(), True),
-            StructField("business_type", StringType(), True),
-            StructField("currency", StringType(), True),
-            StructField("source_document_mrid", StringType(), True),
-            StructField("requested_start_date", StringType(), False),
-            StructField("requested_end_date", StringType(), False),
-            StructField("source_system", StringType(), False),
-            StructField("ingestion_timestamp", StringType(), False),
-        ]
-    )
+    return _struct_type(ENTSOE_BRONZE_FIELDS)
 
 
 def open_meteo_bronze_schema() -> "StructType":
     """Application-owned schema for `bronze_open_meteo_weather` (Spec 001).
 
     Mirrors exactly what `open_meteo_bronze.build_bronze_records` emits.
-    `utc_offset_seconds` is `LongType`, not `IntegerType`, to match what
-    PySpark's own type inference (`spark.createDataFrame(records)` with no
-    explicit schema, the pre-`delta_schema` writer) already produced for
-    every real table — confirmed via `DESCRIBE TABLE
-    bronze_open_meteo_weather` showing `bigint`, not a value-range need.
     """
-    from pyspark.sql.types import DoubleType, LongType, StringType, StructField, StructType
-
-    return StructType(
-        [
-            StructField("country_code", StringType(), False),
-            StructField("country_name", StringType(), False),
-            StructField("reference_location", StringType(), False),
-            StructField("latitude", DoubleType(), False),
-            StructField("longitude", DoubleType(), False),
-            StructField("timezone", StringType(), False),
-            StructField("returned_latitude", DoubleType(), True),
-            StructField("returned_longitude", DoubleType(), True),
-            StructField("returned_timezone", StringType(), True),
-            StructField("utc_offset_seconds", LongType(), True),
-            StructField("observation_date", StringType(), False),
-            StructField("source_variable", StringType(), False),
-            StructField("source_value", DoubleType(), True),
-            StructField("source_unit", StringType(), True),
-            StructField("source_endpoint", StringType(), False),
-            StructField("source_system", StringType(), False),
-            StructField("ingestion_timestamp", StringType(), False),
-        ]
-    )
+    return _struct_type(OPEN_METEO_BRONZE_FIELDS)
 
 
 def worldbank_bronze_schema() -> "StructType":
     """Application-owned schema for `bronze_worldbank_indicators`.
 
     Mirrors exactly what `worldbank_bronze.build_bronze_records` emits.
-    `value` is nullable — World Bank can list a record for a
-    country/indicator/year with a `null` value.
     """
-    from pyspark.sql.types import DoubleType, IntegerType, StringType, StructField, StructType
-
-    return StructType(
-        [
-            StructField("country_code", StringType(), False),
-            StructField("country_name", StringType(), False),
-            StructField("indicator_code", StringType(), False),
-            StructField("indicator_name", StringType(), False),
-            StructField("year", IntegerType(), False),
-            StructField("value", DoubleType(), True),
-            StructField("source_system", StringType(), False),
-            StructField("ingestion_timestamp", StringType(), False),
-        ]
-    )
-
-
-def backfill_checkpoint_schema() -> "StructType":
-    """Application-owned schema for `backfill_checkpoint` (control-plane
-    state for the historical backfill orchestrator, not source data).
-
-    One row per (source, country_code, dataset, month_start). `dataset`
-    is the ENTSO-E dataset name (load/generation/price) or the literal
-    `"weather"` for Open-Meteo, which has no per-dataset split. Progress
-    is tracked here explicitly — never inferred from MIN/MAX dates in
-    Bronze/Silver, which cannot distinguish "not attempted yet" from
-    "legitimately no data for this period."
-    """
-    from pyspark.sql.types import IntegerType, StringType, StructField, StructType
-
-    return StructType(
-        [
-            StructField("source", StringType(), False),
-            StructField("country_code", StringType(), False),
-            StructField("dataset", StringType(), False),
-            StructField("month_start", StringType(), False),
-            StructField("status", StringType(), False),
-            StructField("attempt_count", IntegerType(), False),
-            StructField("started_at", StringType(), True),
-            StructField("completed_at", StringType(), True),
-            StructField("last_error", StringType(), True),
-            StructField("updated_at", StringType(), False),
-        ]
-    )
+    return _struct_type(WORLDBANK_BRONZE_FIELDS)
 
 
 def _field_types(schema: "StructType") -> Dict[str, object]:

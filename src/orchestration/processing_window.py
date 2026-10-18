@@ -16,9 +16,8 @@ from datetime import date, datetime, timedelta, timezone as dt_timezone
 from typing import Optional, Tuple
 
 DAILY = "daily"
-BACKFILL = "backfill"
 REPROCESS = "reprocess"
-VALID_EXECUTION_MODES = (DAILY, BACKFILL, REPROCESS)
+VALID_EXECUTION_MODES = (DAILY, REPROCESS)
 
 # Spec 006: "Initial MVP lookback: 3 calendar days."
 DEFAULT_ENTSOE_LOOKBACK_DAYS = 3
@@ -78,9 +77,9 @@ def resolve_open_meteo_window(
     completed date (mirrors `resolve_entsoe_window` — the Forecast API
     backing this path serves a value that can still improve as a later
     model run supersedes an earlier one; see
-    `DEFAULT_OPEN_METEO_LOOKBACK_DAYS`). `backfill`/`reprocess`: the
-    explicitly supplied start_date/end_date (against the Historical/
-    Archive API instead — see the ingestion notebook).
+    `DEFAULT_OPEN_METEO_LOOKBACK_DAYS`). `reprocess`: the explicitly
+    supplied start_date/end_date (against the Historical/Archive API
+    instead — see the ingestion notebook).
     """
     _validate_mode(execution_mode)
     if execution_mode == DAILY:
@@ -104,8 +103,8 @@ def resolve_entsoe_window(
     `daily`: a rolling recent-date lookback window ending at the latest
     completed date (Spec 006 "Why ENTSO-E Uses a Lookback" — ENTSO-E
     values may be revised, or previously missing intervals may become
-    available, after first publication). `backfill`/`reprocess`: the
-    explicitly supplied start_date/end_date.
+    available, after first publication). `reprocess`: the explicitly
+    supplied start_date/end_date.
     """
     _validate_mode(execution_mode)
     if execution_mode == DAILY:

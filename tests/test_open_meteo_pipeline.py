@@ -13,11 +13,7 @@ import pytest
 
 from src.config.countries import CountryConfig
 from src.ingestion.open_meteo_client import OpenMeteoAPIError
-from src.ingestion.open_meteo_pipeline import (
-    backfill_date_range,
-    daily_processing_date,
-    run_ingestion,
-)
+from src.ingestion.open_meteo_pipeline import daily_processing_date, run_ingestion
 
 IRELAND = CountryConfig("IE", "Ireland", "Dublin", 53.3498, -6.2603, "Europe/Dublin")
 GERMANY = CountryConfig("DE", "Germany", "Berlin", 52.5200, 13.4050, "Europe/Berlin")
@@ -46,25 +42,6 @@ def _payload_for(country_code):
 
 def test_daily_processing_date_is_the_most_recently_completed_day():
     assert daily_processing_date(date(2024, 3, 15)) == date(2024, 3, 14)
-
-
-def test_backfill_date_range_is_configurable_not_hardcoded():
-    start, end = backfill_date_range(months=24, end_date=date(2024, 3, 15))
-
-    assert end == date(2024, 3, 15)
-    assert start < end
-    months_span = (end.year - start.year) * 12 + (end.month - start.month)
-    assert months_span in (23, 24)
-
-
-def test_backfill_date_range_defaults_to_yesterday_when_no_end_date_given():
-    _, end = backfill_date_range(months=1)
-    assert end == daily_processing_date()
-
-
-def test_backfill_date_range_rejects_non_positive_months():
-    with pytest.raises(ValueError):
-        backfill_date_range(months=0)
 
 
 def test_run_ingestion_rejects_inverted_date_range():
