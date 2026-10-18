@@ -136,14 +136,18 @@ def test_write_month_adds_to_what_an_earlier_attempt_landed():
     writer.write_month(
         store, writer.SOURCE_OPEN_METEO, date(2024, 3, 1), [_weather_row("IE", "2024-03-01")],
     )
-    total = writer.write_month(
+    written = writer.write_month(
         store, writer.SOURCE_OPEN_METEO, date(2024, 3, 1), [_weather_row("DE", "2024-03-01")],
     )
 
-    assert total == 2
+    # The return value is what this call wrote, not what the file now
+    # holds — otherwise a run that re-fetched one country would claim
+    # the whole month's rows as its own.
+    assert written == 1
     key = store.key(writer.month_key(writer.SOURCE_OPEN_METEO, date(2024, 3, 1)))
     stored = writer.from_parquet_bytes(writer.SOURCE_OPEN_METEO, store.get(key))
     assert {row["country_code"] for row in stored} == {"IE", "DE"}
+    assert len(stored) == 2
 
 
 def test_write_month_with_no_records_leaves_an_existing_file_untouched():

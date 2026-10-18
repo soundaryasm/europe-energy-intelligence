@@ -256,9 +256,31 @@ def fetch_entsoe_document(
         _validate_response_xml(response.text, request)
         return response.text
 
+
     # ENTSO-E also returns 400 with an Acknowledgement_MarketDocument body
-    # describing the actual problem — surface that reason when present.
-    _validate_response_xml(response.text, request)
+    # describing the actual problem — surface that reason when present,
+    # but never at the cost of the status code.
+    try:
+        _validate_response_xml(response.text, request)
+    except EntsoeNoDataError:
+        # A confirmed "no matching data" wins over the status: it is how
+        # a legitimately empty window is classified `unavailable` rather
+        # than `failed`, and re-labelling it a transport failure would
+        # turn confirmed absence into a retry loop.
+        raise
+    except EntsoeAPIError as exc:
+        # Anything else the body says is worth keeping, but never at the
+        # cost of the status code — a gateway or throttling layer in
+        # front of the API answers with HTML or plain text, and
+        # reporting only "could not be parsed as XML" discards the one
+        # fact that explains the failure. Observed on 2026-10-18, where
+        # 29 failures were reported as malformed XML with no indication
+        # of what the upstream actually said.
+        raise EntsoeAPIError(
+            f"ENTSO-E request for {request.country_code}/{request.dataset.name} failed with "
+            f"status {response.status_code}: {exc}"
+        ) from exc
+
     raise EntsoeAPIError(
         f"ENTSO-E request for {request.country_code}/{request.dataset.name} failed with "
         f"status {response.status_code}: {response.text[:500]}"

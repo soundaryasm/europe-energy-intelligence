@@ -380,3 +380,42 @@ def test_run_ingestion_processes_countries_concurrently():
     )
 
     assert 1 < state["max_seen"] <= 5  # genuine overlap, never more than max_workers
+
+
+def test_circuit_breaker_skips_are_logged_not_only_recorded(caplog):
+    """A skipped combination is work silently discarded.
+
+    One open breaker can account for the overwhelming majority of a
+    run's failures, so reading the errors dict afterwards is no
+    substitute for seeing it happen in the run log.
+    """
+    from src.orchestration.circuit_breaker import CircuitBreaker
+    from src.ingestion.entsoe_pipeline import _process_country, resolve_country_domains
+    from src.config.entsoe import EntsoeCountryDomain
+    from src.ingestion.entsoe_datasets import ALL_DATASETS
+
+    breaker = CircuitBreaker(distinct_failure_threshold=1)
+    breaker.record_failure("DE")  # already open
+
+    with caplog.at_level("WARNING"):
+        result = _process_country(
+            EntsoeCountryDomain("IE", "10Y1001A1001A59C", validated=True),
+            ALL_DATASETS,
+            [(date(2024, 1, 1), date(2024, 1, 7))],
+            token="t", timeout=1, max_retries=1, breaker=breaker,
+            fetch_fn=lambda *a, **k: pytest.fail("must not fetch while open"),
+            start_date=date(2024, 1, 1), end_date=date(2024, 1, 7),
+        )
+
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    assert "circuit breaker open" in logged
+    assert "IE:load" in logged
+    assert len(result.failed) == len(ALL_DATASETS)
+
+
+def test_breaker_threshold_tolerates_a_minority_of_countries_failing():
+    """Three of fifteen is weak evidence of a platform-wide outage and
+    strong enough to discard the rest of the run."""
+    from src.ingestion.entsoe_pipeline import DEFAULT_CIRCUIT_BREAKER_THRESHOLD
+
+    assert DEFAULT_CIRCUIT_BREAKER_THRESHOLD == 5

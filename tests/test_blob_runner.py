@@ -347,3 +347,50 @@ def test_a_world_bank_failure_does_not_fail_the_year():
     )
 
     assert result.year == 2026
+
+
+def test_a_skipped_month_does_not_rewrite_the_manifest():
+    # A year that is almost entirely done would otherwise rewrite the
+    # whole manifest once per month for no reason.
+    store = _store()
+    manifest = Manifest()
+    for month in runner.months_in_year(2026, REFERENCE):
+        for combo in runner.expected_combos([IRELAND]):
+            manifest.record(month, combo, STATUS_SUCCESS)
+    # One month left open so the year is still selected for work.
+    manifest.record(date(2026, 1, 1), combo_id("entsoe", "IE", "load"), STATUS_FAILED)
+
+    saves = []
+    original = manifest.save
+    manifest.save = lambda s: (saves.append(1), original(s))[1]
+
+    runner.run_year(
+        store, token="t", countries=[IRELAND], reference_date=REFERENCE,
+        manifest=manifest,
+        entsoe_ingestion_fn=_entsoe_fn([]),
+        open_meteo_ingestion_fn=_open_meteo_fn([]),
+        worldbank_ingestion_fn=lambda *a, **k: None,
+    )
+
+    # Only the one month that actually ran.
+    assert len(saves) == 1
+
+
+def test_given_up_combinations_are_reported_separately_from_unresolved():
+    # `given_up` is not `failed`, so a report that filters on `failed`
+    # alone shows a permanently abandoned month as a clean run.
+    month = date(2026, 2, 1)
+    manifest = Manifest()
+    store = _store()
+
+    for _ in range(GIVE_UP_AFTER_ATTEMPTS):
+        result = runner.run_year(
+            store, token="t", countries=[IRELAND], reference_date=REFERENCE,
+            manifest=manifest,
+            entsoe_ingestion_fn=_entsoe_fn([]),
+            open_meteo_ingestion_fn=_open_meteo_fn([]),
+            worldbank_ingestion_fn=lambda *a, **k: None,
+        )
+
+    assert result.given_up
+    assert not result.unresolved

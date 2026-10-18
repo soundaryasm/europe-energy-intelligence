@@ -60,7 +60,18 @@ DEFAULT_MAX_WORKERS = 5
 # Distinct countries failing before the circuit breaker stops issuing
 # new requests. See `circuit_breaker.py` for why this counts distinct
 # countries, not raw failed-request count.
-DEFAULT_CIRCUIT_BREAKER_THRESHOLD = 3
+#
+# Five of fifteen, not three: at three the breaker trips on a fifth of
+# the countries having trouble, which is weak evidence of a
+# platform-wide outage and strong enough to discard the rest of the
+# run. Observed on 2026-10-18 — a historical run lost 211 of 257
+# combinations to skips rather than to actual failures, including three
+# months where nothing at all was written, and the immediately
+# following run re-fetched the same windows with zero errors. The
+# breaker is meant to stop a genuinely dead upstream from burning the
+# whole run, not to abandon ten working countries because five are
+# briefly slow.
+DEFAULT_CIRCUIT_BREAKER_THRESHOLD = 5
 
 
 @dataclass
@@ -225,6 +236,16 @@ def _process_country(
         result.datasets_seen.append(dataset.name)
 
         if breaker.is_open():
+            # Logged, not only recorded: a skipped combination is work
+            # silently discarded, and at 15 countries one open breaker
+            # can account for the overwhelming majority of a run's
+            # failures. Reading the errors dict afterwards is no
+            # substitute for seeing it happen in the run log.
+            logger.warning(
+                "Skipping %s: circuit breaker open (distinct failed countries: %s)",
+                attempt_key,
+                sorted(breaker.failed_identifiers),
+            )
             result.failed.append(attempt_key)
             result.errors[attempt_key] = (
                 f"Skipped: circuit breaker open (distinct failed countries: "

@@ -38,6 +38,7 @@ from src.blob.completeness import (
 from src.blob.manifest import (
     Manifest,
     STATUS_FAILED,
+    STATUS_GIVEN_UP,
     combo_id,
     month_id,
 )
@@ -92,12 +93,32 @@ class YearResult:
 
     @property
     def unresolved(self) -> List[str]:
-        """`month:combo` pairs this invocation left unresolved."""
+        """`month:combo` pairs this invocation left unresolved.
+
+        These are retried on the next invocation — `failed` keeps a
+        month eligible for the walk.
+        """
+        return self._with_status(STATUS_FAILED)
+
+    @property
+    def given_up(self) -> List[str]:
+        """`month:combo` pairs this invocation abandoned permanently.
+
+        Only combinations that escalated during *this* invocation, not
+        every combination ever given up: `statuses` holds what was
+        actually attempted, and a combination already given up is not
+        re-attempted. Reporting the running total instead would mark
+        every subsequent invocation as a failure for the rest of the
+        walk, which is as useless as saying nothing.
+        """
+        return self._with_status(STATUS_GIVEN_UP)
+
+    def _with_status(self, wanted: str) -> List[str]:
         return [
             f"{month_id(m.month_start)}:{combo}"
             for m in self.months
             for combo, status in m.statuses.items()
-            if status == STATUS_FAILED
+            if status == wanted
         ]
 
 
@@ -352,7 +373,11 @@ def run_year(
         result.months.append(month_result)
         # Saved per month, not once at the end: an invocation killed by
         # a timeout mid-year keeps every month it already resolved.
-        resolved_manifest.save(store)
+        # Skipped months changed nothing, so they are not rewritten — a
+        # year that is almost entirely done would otherwise rewrite the
+        # whole manifest once per month for no reason.
+        if not month_result.skipped:
+            resolved_manifest.save(store)
 
     _run_worldbank(store, year, resolved_countries, worldbank_ingestion_fn)
 

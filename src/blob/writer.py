@@ -142,7 +142,14 @@ def merge_records(
 def write_month(
     store, source: str, month_start: date, records: List[dict]
 ) -> int:
-    """Merge `records` into `source`'s file for `month_start`. Returns total rows in the file.
+    """Merge `records` into `source`'s file for `month_start`. Returns rows written.
+
+    "Rows written" is the number of incoming records, matching what the
+    Delta writer reports for the same call, not the resulting file's row
+    count. Returning the file total would make a run that re-fetched one
+    country of an otherwise complete month claim the whole month's rows
+    as its own, and a year's reported total would be a sum of file sizes
+    rather than of anything ingested. The file total is logged instead.
 
     Writing nothing when `records` is empty leaves any existing file
     untouched — an attempt that produced no rows must not erase rows an
@@ -158,13 +165,17 @@ def write_month(
     merged = merge_records(source, existing, records)
     store.put(key, to_parquet_bytes(source, merged), content_type="application/vnd.apache.parquet")
     logger.info(
-        "Wrote %s %s: %d incoming, %d total rows", source, month_start, len(records), len(merged),
+        "Wrote %s %s: %d incoming, %d total rows in file",
+        source, month_start, len(records), len(merged),
     )
-    return len(merged)
+    return len(records)
 
 
 def write_year(store, source: str, year: int, records: List[dict]) -> int:
-    """Merge `records` into `source`'s file for `year`, for annual-grain sources."""
+    """Merge `records` into `source`'s file for `year`, for annual-grain sources.
+
+    Returns rows written, on the same basis as `write_month`.
+    """
     if not records:
         logger.info("No %s records for %s; leaving existing file untouched", source, year)
         return 0
@@ -174,5 +185,8 @@ def write_year(store, source: str, year: int, records: List[dict]) -> int:
     existing = from_parquet_bytes(source, existing_bytes) if existing_bytes else []
     merged = merge_records(source, existing, records)
     store.put(key, to_parquet_bytes(source, merged), content_type="application/vnd.apache.parquet")
-    logger.info("Wrote %s %s: %d incoming, %d total rows", source, year, len(records), len(merged))
-    return len(merged)
+    logger.info(
+        "Wrote %s %s: %d incoming, %d total rows in file",
+        source, year, len(records), len(merged),
+    )
+    return len(records)

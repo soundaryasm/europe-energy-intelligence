@@ -11,11 +11,17 @@ Exit status:
     0  a year was resolved, or there was nothing left to resolve
     1  configuration or credentials are missing
     2  the year was attempted but left combinations unresolved
+    3  the year abandoned a combination permanently
 
 Exit 2 is deliberately distinct from exit 0: an unresolved combination is
-expected (it is retried on the next invocation, and escalates to
-`given_up` after three attempts) but it should still be visible as a
-non-success in the run history rather than reported as a clean run.
+expected (it is retried on the next invocation) but it should still be
+visible as a non-success rather than reported as a clean run.
+
+Exit 3 is distinct again, and more serious: a combination that escalated
+to `given_up` will never be retried by the walk, so that month is
+permanently short of data until someone intervenes. Without this it
+exits 0 and reports a clean run, which is how a real gap hides — the
+status is a single word inside a summary dict and nothing else marks it.
 """
 from __future__ import annotations
 
@@ -26,7 +32,7 @@ import sys
 # Resolve `src.*` imports when invoked as a script from the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.blob.manifest import Manifest
+from src.blob.manifest import GIVE_UP_AFTER_ATTEMPTS, Manifest
 from src.blob.runner import run_year
 from src.blob.store import BlobConfigError, BlobStore
 
@@ -74,8 +80,26 @@ def main() -> int:
             len(unresolved),
             unresolved,
         )
-        return 2
-    return 0
+
+    given_up = result.given_up
+    if given_up:
+        logger.error(
+            "%d combination(s) ABANDONED after %d attempts and will not be "
+            "retried by the walk: %s",
+            len(given_up),
+            GIVE_UP_AFTER_ATTEMPTS,
+            given_up,
+        )
+        logger.error(
+            "Those months are permanently short of data. Re-check the cause, "
+            "then return them to the walk with: scripts/reset_given_up.py "
+            "--month <YYYY-MM>  (or --all)"
+        )
+        # Reported ahead of `unresolved`: an abandoned combination is the
+        # worse outcome and must not be masked by the milder one.
+        return 3
+
+    return 2 if unresolved else 0
 
 
 if __name__ == "__main__":

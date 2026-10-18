@@ -238,3 +238,48 @@ def test_fetch_entsoe_document_retries_are_bounded_on_connection_errors():
         )
 
     assert session.get.call_count == 2  # max_retries is now the total attempt count
+
+
+def test_non_xml_error_body_reports_the_http_status_not_a_parse_error():
+    """The status code is the most diagnostic fact about an unexplained
+    failure, and a gateway in front of the API answers with HTML rather
+    than an Acknowledgement document. Validating the body first threw
+    that away and reported "could not be parsed as XML" instead.
+    """
+    # 403 rather than a 5xx: the retryable statuses are exhausted by the
+    # HTTP layer and never reach this branch.
+    session = MagicMock()
+    session.get.return_value = _mock_response(403, "403 Forbidden: rate limited")
+
+    with pytest.raises(EntsoeAPIError) as exc:
+        fetch_entsoe_document(_request(LOAD), token="tok", session=session)
+
+    # The status survives; the body's own complaint may ride along, but
+    # must not replace it.
+    assert "403" in str(exc.value)
+
+
+def test_an_xml_acknowledgement_on_a_non_200_still_surfaces_its_reason():
+    """ENTSO-E returns 400 with an Acknowledgement_MarketDocument
+    describing the real problem; that reason must still win over the
+    bare status."""
+    session = MagicMock()
+    session.get.return_value = _mock_response(400, ACKNOWLEDGEMENT_GENUINE_ERROR_XML)
+
+    with pytest.raises(EntsoeAPIError) as exc:
+        fetch_entsoe_document(_request(LOAD), token="tok", session=session)
+
+    message = str(exc.value)
+    assert "400" in message
+    assert "AMOUNT OF REQUESTED DATA EXCEEDS ALLOWED LIMIT" in message
+
+
+def test_a_no_data_acknowledgement_on_a_non_200_is_still_a_no_data_error():
+    """`EntsoeNoDataError` is how a legitimately empty window is
+    classified `unavailable` rather than `failed`; wrapping it as a
+    transport failure would turn confirmed absence into a retry loop."""
+    session = MagicMock()
+    session.get.return_value = _mock_response(400, ACKNOWLEDGEMENT_ERROR_XML)
+
+    with pytest.raises(EntsoeNoDataError):
+        fetch_entsoe_document(_request(LOAD), token="tok", session=session)

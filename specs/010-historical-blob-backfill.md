@@ -91,6 +91,8 @@ Only a done status lets the walk move past a month.
 
 `given_up` counts as done so that one persistently failing combination cannot hold up every older month indefinitely. It stays distinct from `unavailable` precisely so it can be found and re-attempted later: resetting those entries to `failed` returns them to the walk, and resetting clears the attempt count so a single new failure does not escalate straight back.
 
+An invocation that abandons a combination must say so loudly and must not report success. `given_up` means that month is permanently short of data until someone intervenes, which is the opposite of a clean run. Only combinations abandoned during that invocation are reported, not the running total — reporting the total would mark every later invocation as a failure for the rest of the walk, which is as useless as saying nothing.
+
 ### Attempt Counting
 
 The attempt count exists only to drive escalation to `given_up`.
@@ -147,6 +149,16 @@ The load job rebuilds Silver and Gold over the widened history and republishes t
 
 The current month-to-date is not covered by this layer. It is closed by one run of the daily workflow in `reprocess` mode for that range.
 
+## Observability
+
+Work that is discarded must be visible in the run log, not only in a result object a later reader might inspect.
+
+This applies in particular to combinations skipped because the circuit breaker opened. One open breaker can account for the overwhelming majority of a run's failures, and a run that discards most of a month must not look the same as one that attempted it.
+
+A failure's HTTP status is never dropped in favour of a complaint about the response body. A gateway or throttling layer in front of a source answers with HTML or plain text, and the status is the one fact that explains the failure.
+
+Row counts reported by an invocation are rows that invocation wrote, not rows the destination file now holds. Reporting the file total would let a run that re-fetched one country claim a whole month's rows as its own.
+
 ## Acceptance Criteria
 
 1. One invocation resolves exactly one year and exits.
@@ -155,7 +167,7 @@ The current month-to-date is not covered by this layer. It is closed by one run 
 4. Progress is read from and written to explicit state, never inferred from stored data.
 5. A partially covered month is retryable, never treated as done.
 6. An empty month is only `unavailable` when the source positively confirmed it.
-7. A combination that fails three times escalates to `given_up` and stops blocking the walk.
+7. A combination that fails three times escalates to `given_up` and stops blocking the walk, and the invocation that abandons it reports a failure rather than a clean run.
 8. A `given_up` combination can be returned to the walk without editing code.
 9. A re-attempt fetches only what is unresolved.
 10. Progress is saved after every month, so an interrupted invocation keeps its completed months.
@@ -167,3 +179,6 @@ The current month-to-date is not covered by this layer. It is closed by one run 
 16. Loading the same month into Bronze twice does not duplicate records.
 17. A single unreadable file does not stop the load pass, and the task still fails.
 18. The ingestion reuses the daily workflow's ingestion modules rather than reimplementing them.
+19. Combinations skipped by an open circuit breaker appear in the run log.
+20. A non-success HTTP status is reported even when the response body cannot be interpreted.
+21. Reported row counts are rows written by that invocation.
