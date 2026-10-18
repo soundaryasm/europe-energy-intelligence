@@ -8,20 +8,21 @@ reports that and exits 0 without doing any work, so a schedule left
 running after completion costs one short no-op rather than re-fetching.
 
 Exit status:
-    0  a year was resolved, or there was nothing left to resolve
+    0  the year was resolved, or progressed with some combinations
+       still to retry, or there was nothing left to resolve
     1  configuration or credentials are missing
-    2  the year was attempted but left combinations unresolved
     3  the year abandoned a combination permanently
 
-Exit 2 is deliberately distinct from exit 0: an unresolved combination is
-expected (it is retried on the next invocation) but it should still be
-visible as a non-success rather than reported as a clean run.
+A non-zero exit is reserved for the one outcome that needs a person:
+a combination escalated to `given_up` will never be retried by the walk,
+so that month stays short of data until someone intervenes.
 
-Exit 3 is distinct again, and more serious: a combination that escalated
-to `given_up` will never be retried by the walk, so that month is
-permanently short of data until someone intervenes. Without this it
-exits 0 and reports a clean run, which is how a real gap hides — the
-status is a single word inside a summary dict and nothing else marks it.
+Combinations merely left `failed` do not fail the invocation. They are
+retried on the next one, and on a source that times out under load that
+happens on most runs — reporting it as a failure made the normal case
+indistinguishable from the serious one, which is precisely how the
+serious one gets ignored. They are still logged as a warning, and the
+run summary still names them.
 """
 from __future__ import annotations
 
@@ -95,11 +96,9 @@ def main() -> int:
             "then return them to the walk with: scripts/reset_given_up.py "
             "--month <YYYY-MM>  (or --all)"
         )
-        # Reported ahead of `unresolved`: an abandoned combination is the
-        # worse outcome and must not be masked by the milder one.
         return 3
 
-    return 2 if unresolved else 0
+    return 0
 
 
 if __name__ == "__main__":

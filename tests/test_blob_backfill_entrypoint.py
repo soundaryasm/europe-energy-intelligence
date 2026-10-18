@@ -50,12 +50,25 @@ def test_a_fully_resolved_year_exits_zero(stub):
     assert entrypoint.main() == 0
 
 
-def test_an_unresolved_combination_exits_two(stub):
-    # Expected: it is retried on the next invocation, but should not
-    # read as a clean run.
+def test_an_unresolved_combination_does_not_fail_the_run(stub):
+    # Retrying is the normal case on a source that times out under
+    # load. Reporting it as a failure made the normal outcome
+    # indistinguishable from an abandonment, which is how the one that
+    # matters gets ignored.
     stub(_result(**{IE_GEN: STATUS_FAILED}))
 
-    assert entrypoint.main() == 2
+    assert entrypoint.main() == 0
+
+
+def test_an_unresolved_combination_is_still_warned_about(stub, caplog):
+    stub(_result(**{IE_GEN: STATUS_FAILED}))
+
+    with caplog.at_level("WARNING"):
+        entrypoint.main()
+
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    assert "unresolved" in logged
+    assert IE_GEN in logged
 
 
 def test_an_abandoned_combination_exits_three_not_zero(stub):
@@ -72,11 +85,20 @@ def test_abandonment_is_reported_even_alongside_a_success(stub):
     assert entrypoint.main() == 3
 
 
-def test_abandonment_outranks_a_merely_unresolved_combination(stub):
-    # The worse outcome must not be masked by the milder one.
+def test_abandonment_is_reported_even_when_something_is_also_retrying(stub):
+    # The outcome that needs a person must not be lost behind the
+    # routine one.
     stub(_result(**{IE_GEN: STATUS_GIVEN_UP, IE_LOAD: STATUS_FAILED}))
 
     assert entrypoint.main() == 3
+
+
+def test_only_abandonment_produces_a_non_zero_exit(stub):
+    # The contract the run history depends on: a red mark means a
+    # person is needed, not that the walk is proceeding normally.
+    stub(_result(**{IE_GEN: STATUS_SUCCESS, IE_LOAD: STATUS_FAILED}))
+
+    assert entrypoint.main() == 0
 
 
 def test_abandonment_is_logged_at_error_with_the_recovery_command(stub, caplog):

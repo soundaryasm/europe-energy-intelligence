@@ -93,6 +93,8 @@ Only a done status lets the walk move past a month.
 
 An invocation that abandons a combination must say so loudly and must not report success. `given_up` means that month is permanently short of data until someone intervenes, which is the opposite of a clean run. Only combinations abandoned during that invocation are reported, not the running total — reporting the total would mark every later invocation as a failure for the rest of the walk, which is as useless as saying nothing.
 
+Abandonment is the *only* outcome that fails an invocation. A combination left `failed` is retried on the next one, and against a source that times out under load that happens on most runs. Failing the invocation for it makes the routine outcome indistinguishable from the one that needs a person, which is how the one that needs a person gets ignored. Those combinations are still logged as a warning and still named in the run summary.
+
 ### Attempt Counting
 
 The attempt count exists only to drive escalation to `given_up`.
@@ -168,6 +170,7 @@ Row counts reported by an invocation are rows that invocation wrote, not rows th
 5. A partially covered month is retryable, never treated as done.
 6. An empty month is only `unavailable` when the source positively confirmed it.
 7. A combination that fails three times escalates to `given_up` and stops blocking the walk, and the invocation that abandons it reports a failure rather than a clean run.
+7a. An invocation that leaves combinations merely `failed` reports success, and warns about them.
 8. A `given_up` combination can be returned to the walk without editing code.
 9. A re-attempt fetches only what is unresolved.
 10. Progress is saved after every month, so an interrupted invocation keeps its completed months.
