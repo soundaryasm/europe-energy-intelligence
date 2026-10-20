@@ -1,33 +1,25 @@
 # Historical ingestion into blob storage (Spec 010).
 #
 # Each run resolves one year and exits, walking backwards from the last
-# complete month to January 2015. The schedule supplies the repetition;
-# a run that finds nothing left to resolve exits immediately, so the
-# schedule costs one short no-op per fire once the history is complete.
+# complete month to January 2015. Repetition comes from an external
+# scheduler; a run that finds nothing left to resolve exits immediately,
+# so a schedule left in place costs one short no-op per fire once the
+# history is complete.
 #
-# Every two hours on odd hours, 01:00 through 23:00. GitHub Actions
-# evaluates cron in UTC, which is what every schedule in this project
-# uses.
+# Dispatch only, deliberately — there is no `schedule:` here. GitHub
+# runs scheduled workflows on a best-effort basis and drops them
+# outright under load, with no record of a dropped fire. Measured on
+# 2026-10-18: of eight fires due across the day, two were delivered, 28
+# and 58 minutes late, and moving off the top of the hour changed
+# nothing. A walk that needs a dozen or so invocations to finish cannot
+# be driven by a trigger that silently skips most of them.
 #
-# Two hours is what the worst case needs rather than the typical one: a
-# year is ~2,700 ENTSO-E requests, normally ~15 minutes, but every
-# request carries a 3-attempt retry with exponential backoff and a 30s
-# read timeout, so a degraded upstream can stretch a year past an hour.
-# Spacing wider than that worst case is what keeps runs from
-# overlapping; `concurrency` below enforces it regardless.
-#
-# Odd hours at half past, rather than on the hour: GitHub delays
-# scheduled runs on shared runners and drops them outright under load,
-# and the top of the hour is the most congested slot. Observed on
-# 2026-10-18 — of six fires due, two were delivered, 28 and 58 minutes
-# late. Frequency is deliberately not reduced in response: every fire is
-# an independent retry of a resumable walk, so more fires absorb drops,
-# and `concurrency` below stops them overlapping.
+# Invocations are instead dispatched by a Supabase cron job calling the
+# workflow_dispatch API, which fires reliably. Adding `schedule:` back
+# alongside it would double-trigger.
 name: Historical backfill
 
 on:
-  schedule:
-    - cron: "30 1-23/2 * * *"
   workflow_dispatch:
 
 # ENTSO-E rate-limits per token as well as per IP, and this workflow

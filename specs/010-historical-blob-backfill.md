@@ -40,11 +40,13 @@ An invocation that finds nothing left to resolve exits immediately without fetch
 
 ### Scheduling
 
-Runs are scheduled, not run as a single long job, and spacing must exceed the worst-case duration of one year rather than its typical duration.
+Invocations are repeated by an external scheduler calling the CI provider's dispatch API, not by a schedule inside the workflow.
 
-A year is roughly 2,700 ENTSO-E requests. Typically that is around fifteen minutes. Every request carries a bounded retry with exponential backoff and a read timeout, so a degraded upstream can stretch a year past an hour.
+The CI provider runs scheduled workflows on a best-effort basis and drops them under load, leaving no record of a dropped fire. Measured on 2026-10-18: of eight fires due across a day, two were delivered, 28 and 58 minutes late, and moving off the top of the hour changed nothing. A walk that needs a dozen or so invocations to finish cannot be driven by a trigger that silently skips most of them.
 
-Concurrent invocations are not permitted. ENTSO-E rate-limits per token as well as per IP, and this layer holds the only token; two invocations fetching at once would share that budget and risk the ban that follows exceeding it.
+Spacing must exceed the worst-case duration of one year rather than its typical duration. A year is roughly 2,700 ENTSO-E requests, typically around fifteen minutes; every request carries a bounded retry with exponential backoff and a read timeout, so a degraded upstream can stretch a year past an hour.
+
+Concurrent invocations are not permitted. ENTSO-E rate-limits per token as well as per IP, and this layer holds the only token; two invocations fetching at once would share that budget and risk the ban that follows exceeding it. Serialisation is enforced in the workflow itself rather than relying on the scheduler's spacing.
 
 ## Storage Layout
 
@@ -178,7 +180,7 @@ Row counts reported by an invocation are rows that invocation wrote, not rows th
 12. An attempt producing no rows leaves an existing file untouched.
 13. Re-running a year produces the same files, not additional ones.
 14. Blob credentials are re-minted as needed for the life of an invocation.
-15. Concurrent invocations are prevented.
+15. Concurrent invocations are prevented, regardless of how often a dispatch arrives.
 16. Loading the same month into Bronze twice does not duplicate records.
 17. A single unreadable file does not stop the load pass, and the task still fails.
 18. The ingestion reuses the daily workflow's ingestion modules rather than reimplementing them.

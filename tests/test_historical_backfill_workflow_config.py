@@ -27,35 +27,16 @@ def _job(workflow):
     return workflow["jobs"]["resolve-year"]
 
 
-def test_workflow_runs_on_a_schedule():
-    assert "schedule" in _triggers(_load())
-
-
-def test_workflow_can_also_be_triggered_by_hand():
+def test_workflow_is_dispatch_only():
     assert "workflow_dispatch" in _triggers(_load())
 
 
-def test_schedule_spacing_exceeds_the_worst_case_year():
-    # Spec 010: spacing must exceed the worst-case duration of one year,
-    # not its typical duration, so invocations cannot overlap.
-    crons = [entry["cron"] for entry in _triggers(_load())["schedule"]]
-
-    assert crons == ["30 1-23/2 * * *"]
-
-
-def test_schedule_fires_on_odd_hours_and_never_at_midnight():
-    cron = _triggers(_load())["schedule"][0]["cron"]
-    _, hour, *_ = cron.split()
-
-    assert hour == "1-23/2"
-
-
-def test_schedule_avoids_the_top_of_the_hour():
-    # The most congested slot on GitHub's scheduler, where a fire is
-    # most likely to be delayed or dropped.
-    minute = _triggers(_load())["schedule"][0]["cron"].split()[0]
-
-    assert minute != "0"
+def test_workflow_carries_no_schedule_of_its_own():
+    # GitHub runs scheduled workflows best-effort and drops them under
+    # load; a walk needing a dozen invocations cannot be driven by a
+    # trigger that silently skips most of them. An external scheduler
+    # dispatches instead, and a `schedule:` here would double-trigger.
+    assert "schedule" not in _triggers(_load())
 
 
 def test_concurrent_invocations_are_prevented():
