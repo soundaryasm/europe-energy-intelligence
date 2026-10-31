@@ -56,10 +56,11 @@ class FakeResult:
 
 
 def _entsoe_fn(records_by_call=None, unavailable=None, errors=None, calls=None):
-    def run(start_date, end_date, *, token, countries, chunk_days, spark_writer):
+    def run(start_date, end_date, *, token, countries, chunk_days, spark_writer, domains=None):
         if calls is not None:
             calls.append({"countries": [c.country_code for c in countries],
-                          "start": start_date, "end": end_date})
+                          "start": start_date, "end": end_date,
+                          "domain": domains["DE"].domain if domains else "CONFIGURED"})
         records = list(records_by_call or [])
         written = spark_writer(None, records, "table") if records else 0
         return FakeResult(written, list(unavailable or []), dict(errors or {}))
@@ -498,6 +499,37 @@ def test_a_country_with_no_former_domain_is_never_retried():
     assert "IE" in calls[0]["countries"]
 
 
+def test_a_partially_covered_month_also_triggers_the_retry():
+    # The month containing a switchover is served partly by each
+    # domain, so the current one returns a few intervals and the month
+    # is `failed`, not `unavailable`. Keying on unavailability alone
+    # would skip exactly the month that needs both.
+    month = date(2026, 2, 1)
+    calls = []
+
+    def run(start_date, end_date, *, token, countries, chunk_days, spark_writer, domains=None):
+        dom = domains["DE"].domain if domains else "CONFIGURED"
+        calls.append({"domain": dom})
+        if dom == "CONFIGURED":
+            rows = _de_rows([1, 2], month)          # a sliver of the month
+            spark_writer(None, rows, "t")
+            return FakeResult(len(rows), [], {})     # nothing succeeded
+        rows = _de_rows(_all_days(month), month)
+        spark_writer(None, rows, "t")
+        return FakeResult(
+            len(rows), [], {},
+            succeeded=[f"DE:{d.name}" for d in ALL_DATASETS],
+        )
+
+    result = runner.run_month(
+        _store(), Manifest(), month, token="t", countries=[GERMANY],
+        entsoe_ingestion_fn=run, open_meteo_ingestion_fn=_open_meteo_fn([]),
+    )
+
+    assert [c["domain"] for c in calls] == ["CONFIGURED", FORMER_DE]
+    assert result.statuses[combo_id("entsoe", "DE", "load")] == STATUS_SUCCESS
+
+
 def test_a_single_missing_dataset_does_not_trigger_a_former_domain_retry():
     # One series missing while the others returned data is a genuine gap
     # in that series, not evidence of the wrong domain.
@@ -508,7 +540,7 @@ def test_a_single_missing_dataset_does_not_trigger_a_former_domain_retry():
         calls.append({"domain": domains["DE"].domain if domains else "CONFIGURED"})
         rows = _entsoe_rows("DE", "load", _all_days(month), month)
         spark_writer(None, rows, "t")
-        return FakeResult(len(rows), ["DE:price"], {})
+        return FakeResult(len(rows), ["DE:price"], {}, succeeded=["DE:load"])
 
     runner.run_month(
         _store(), Manifest(), month, token="t", countries=[GERMANY],

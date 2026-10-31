@@ -125,7 +125,9 @@ A country's configured ENTSO-E domain is the one it uses now. Where a country ha
 
 A country whose every dataset comes back empty for a month is therefore re-requested under the domain it previously used, where one is known. Data found that way is recorded as success, not left marked unavailable: the data exists, and recording a confirmed absence that is not true is worse than not asking.
 
-Only a country reporting nothing at all is retried. One dataset missing while the others returned data is a genuine gap in that series, and asking under a former domain would not help.
+Only a country where no dataset succeeded is retried. One dataset missing while the others returned data is a genuine gap in that series, and asking under a former domain would not help.
+
+The test is "nothing succeeded" rather than "everything was unavailable", because the month containing a switchover is served partly by each domain. The current domain returns a few intervals for it, so that month comes back incomplete rather than empty, and keying on emptiness alone would skip exactly the month that needs both. Records from the two requests are unioned before coverage is judged, so a straddling month resolves as complete.
 
 No switchover date is encoded. Trying the former domain only when the current one came back empty means nothing can fall out of step with what the source actually serves, and a month straddling a boundary needs no special handling.
 

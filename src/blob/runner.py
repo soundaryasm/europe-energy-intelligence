@@ -343,11 +343,19 @@ def _countries_to_retry_on_former_domain(countries, ingestion_result):
     error, so nothing is raised to catch — the outcome arrives as
     `unavailable` in the result.
 
-    Only countries where *every* dataset was unavailable are retried. A
-    country reporting nothing at all for a whole month is what being
-    asked under the wrong domain looks like; one dataset missing while
-    the others returned data is a genuine gap in that series, and
-    re-asking under a former domain would not help.
+    Only countries where *no* dataset succeeded are retried. That is
+    what being asked under the wrong domain looks like; one dataset
+    missing while the others returned data is a genuine gap in that
+    series, and re-asking under a former domain would not help.
+
+    Deliberately "nothing succeeded" rather than "everything was
+    unavailable". A month containing the switchover is served partly by
+    each domain — Germany's handover falls mid-day on 2018-09-30, so
+    the current domain returns a few intervals and the month comes back
+    `failed` for incomplete coverage rather than `unavailable`. Keying
+    on unavailability alone would skip exactly the month that needs both
+    domains, and the records from the two are unioned before coverage is
+    judged, so the straddle resolves to a complete month.
     """
     retry = []
     for country in countries:
@@ -355,7 +363,7 @@ def _countries_to_retry_on_former_domain(countries, ingestion_result):
         if not former:
             continue
         keys = [f"{country.country_code}:{d.name}" for d in ALL_DATASETS]
-        if all(k in ingestion_result.unavailable for k in keys):
+        if not any(k in ingestion_result.succeeded for k in keys):
             retry.append(country)
     return retry
 
