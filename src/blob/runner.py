@@ -39,6 +39,7 @@ from src.blob.manifest import (
     Manifest,
     STATUS_FAILED,
     STATUS_GIVEN_UP,
+    STATUS_SUCCESS,
     combo_id,
     month_id,
 )
@@ -297,7 +298,7 @@ def run_month(
         records = list(entsoe_sink.records)
 
         retry_countries = _countries_to_retry_on_former_domain(
-            entsoe_countries, entsoe_result,
+            month_start, entsoe_countries, entsoe_result, records,
         )
         if retry_countries:
             former_result, former_records = _retry_on_former_domains(
@@ -334,7 +335,9 @@ def run_month(
     return result
 
 
-def _countries_to_retry_on_former_domain(countries, ingestion_result):
+def _countries_to_retry_on_former_domain(
+    month_start, countries, ingestion_result, records,
+):
     """Countries whose every dataset came back empty and that once used
     another domain.
 
@@ -343,27 +346,30 @@ def _countries_to_retry_on_former_domain(countries, ingestion_result):
     error, so nothing is raised to catch — the outcome arrives as
     `unavailable` in the result.
 
-    Only countries where *no* dataset succeeded are retried. That is
-    what being asked under the wrong domain looks like; one dataset
-    missing while the others returned data is a genuine gap in that
-    series, and re-asking under a former domain would not help.
+    Only countries where no dataset covered the whole month are
+    retried. That is what being asked under the wrong domain looks
+    like; one dataset short while the others covered the month is a
+    genuine gap in that series, and re-asking under a former domain
+    would not help.
 
-    Deliberately "nothing succeeded" rather than "everything was
-    unavailable". A month containing the switchover is served partly by
-    each domain — Germany's handover falls mid-day on 2018-09-30, so
-    the current domain returns a few intervals and the month comes back
-    `failed` for incomplete coverage rather than `unavailable`. Keying
-    on unavailability alone would skip exactly the month that needs both
-    domains, and the records from the two are unioned before coverage is
-    judged, so the straddle resolves to a complete month.
+    The test is whole-month coverage, not the pipeline's own
+    `succeeded` list. That list means "returned some rows", which is
+    not the same question: a month containing a switchover is served
+    partly by each domain, so the current one returns a sliver and
+    every dataset lands in `succeeded` while covering a single day.
+    Germany's handover falls mid-day on 2018-09-30, and keying on
+    `succeeded` skipped exactly the month that needed both domains.
+    Records from the two requests are unioned before coverage is judged
+    again, so the straddle resolves to a complete month.
     """
     retry = []
     for country in countries:
-        former = FORMER_DOMAINS.get(country.country_code)
-        if not former:
+        if country.country_code not in FORMER_DOMAINS:
             continue
-        keys = [f"{country.country_code}:{d.name}" for d in ALL_DATASETS]
-        if not any(k in ingestion_result.succeeded for k in keys):
+        statuses = _entsoe_statuses(
+            month_start, [country], ingestion_result, records,
+        )
+        if not any(st == STATUS_SUCCESS for st in statuses.values()):
             retry.append(country)
     return retry
 
@@ -422,9 +428,14 @@ def _merge_ingestion_results(first, second):
     return first
 
 
-def _record_entsoe(
-    manifest, month_start, countries, ingestion_result, records, month_result,
-) -> None:
+def _entsoe_statuses(month_start, countries, ingestion_result, records):
+    """Classify each country/dataset of a month from the records fetched.
+
+    Shared by the former-domain retry decision and by recording, so both
+    judge a month by the same measure — whole-month coverage — rather
+    than one of them using a weaker proxy.
+    """
+    statuses = {}
     for country in countries:
         for dataset in ALL_DATASETS:
             attempt_key = f"{country.country_code}:{dataset.name}"
@@ -435,15 +446,24 @@ def _record_entsoe(
                 dataset_field="dataset_type",
                 dataset=dataset.name,
             )
-            status = classify(
+            statuses[attempt_key] = classify(
                 evaluate_coverage(month_start, covered),
                 source_reported_no_data=attempt_key in ingestion_result.unavailable,
             )
-            combo = combo_id(blob_writer.SOURCE_ENTSOE, country.country_code, dataset.name)
-            month_result.statuses[combo] = manifest.record(
-                month_start, combo, status,
-                error=ingestion_result.errors.get(attempt_key),
-            )
+    return statuses
+
+
+def _record_entsoe(
+    manifest, month_start, countries, ingestion_result, records, month_result,
+) -> None:
+    statuses = _entsoe_statuses(month_start, countries, ingestion_result, records)
+    for attempt_key, status in statuses.items():
+        country_code, dataset_name = attempt_key.split(":")
+        combo = combo_id(blob_writer.SOURCE_ENTSOE, country_code, dataset_name)
+        month_result.statuses[combo] = manifest.record(
+            month_start, combo, status,
+            error=ingestion_result.errors.get(attempt_key),
+        )
 
 
 def _record_open_meteo(

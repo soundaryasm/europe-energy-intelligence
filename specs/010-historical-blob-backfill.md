@@ -127,7 +127,7 @@ A country whose every dataset comes back empty for a month is therefore re-reque
 
 Only a country where no dataset succeeded is retried. One dataset missing while the others returned data is a genuine gap in that series, and asking under a former domain would not help.
 
-The test is "nothing succeeded" rather than "everything was unavailable", because the month containing a switchover is served partly by each domain. The current domain returns a few intervals for it, so that month comes back incomplete rather than empty, and keying on emptiness alone would skip exactly the month that needs both. Records from the two requests are unioned before coverage is judged, so a straddling month resolves as complete.
+The measure is whole-month coverage, not whether the source returned any rows. The month containing a switchover is served partly by each domain, so the current one returns a day or two and every dataset looks like it returned data while covering almost none of the month. Judging by "returned something" skips exactly the month that needs both domains. Records from the two requests are unioned before coverage is judged again, so a straddling month resolves as complete.
 
 No switchover date is encoded. Trying the former domain only when the current one came back empty means nothing can fall out of step with what the source actually serves, and a month straddling a boundary needs no special handling.
 

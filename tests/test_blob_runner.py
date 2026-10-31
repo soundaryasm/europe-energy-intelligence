@@ -469,7 +469,7 @@ def test_data_found_on_the_former_domain_is_recorded_as_success():
     assert result.statuses[combo_id("entsoe", "DE", "generation")] == STATUS_SUCCESS
 
 
-def test_no_retry_when_the_configured_domain_already_returned_data():
+def test_no_retry_when_the_configured_domain_already_covered_the_month():
     # The retry must cost nothing for the years that are already fine.
     month = date(2026, 2, 1)
     calls = []
@@ -497,6 +497,45 @@ def test_a_country_with_no_former_domain_is_never_retried():
 
     assert [c["domain"] for c in calls] == ["CONFIGURED"]
     assert "IE" in calls[0]["countries"]
+
+
+def test_a_sliver_of_a_month_still_triggers_the_retry():
+    """The live case this was got wrong on.
+
+    A month containing a switchover is served partly by each domain, so
+    the current one returns a day or two and the pipeline reports every
+    dataset as having succeeded — it returned rows. Judging by that
+    skipped exactly the month that needed both domains. The measure has
+    to be whole-month coverage.
+    """
+    month = date(2026, 2, 1)
+    calls = []
+
+    def run(start_date, end_date, *, token, countries, chunk_days, spark_writer, domains=None):
+        dom = domains["DE"].domain if domains else "CONFIGURED"
+        calls.append({"domain": dom})
+        if dom == "CONFIGURED":
+            rows = _de_rows([27, 28], month)    # the tail of the month only
+            spark_writer(None, rows, "t")
+            # The pipeline reports these as succeeded: rows came back.
+            return FakeResult(
+                len(rows), [], {},
+                succeeded=[f"DE:{d.name}" for d in ALL_DATASETS],
+            )
+        rows = _de_rows(_all_days(month), month)
+        spark_writer(None, rows, "t")
+        return FakeResult(
+            len(rows), [], {},
+            succeeded=[f"DE:{d.name}" for d in ALL_DATASETS],
+        )
+
+    result = runner.run_month(
+        _store(), Manifest(), month, token="t", countries=[GERMANY],
+        entsoe_ingestion_fn=run, open_meteo_ingestion_fn=_open_meteo_fn([]),
+    )
+
+    assert [c["domain"] for c in calls] == ["CONFIGURED", FORMER_DE]
+    assert result.statuses[combo_id("entsoe", "DE", "load")] == STATUS_SUCCESS
 
 
 def test_a_partially_covered_month_also_triggers_the_retry():
