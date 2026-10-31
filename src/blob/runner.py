@@ -67,6 +67,34 @@ ENTSOE_CHUNK_DAYS = 7
 # the dataset segment and the manifest stays uniform across sources.
 OPEN_METEO_DATASET = "weather"
 
+# Bidding zones that a country has since left, keyed by country code.
+#
+# A country's configured domain in `entsoe_domains.yaml` is the one it
+# uses now. Where a country has changed zone, the configured domain
+# holds nothing for the years before the change, and ENTSO-E reports
+# that as a clean "no matching data" rather than an error — so those
+# months resolve as `unavailable` and look settled when they are simply
+# being asked under the wrong code.
+#
+# Germany is the case in hand: it was part of the combined DE-AT-LU zone
+# until the split on 2018-10-01, and 131 months of 2015-2018 landed as
+# `unavailable` before this existed. Verified against live ENTSO-E on
+# 2026-10-31: the two domains are mutually exclusive, with the handover
+# falling mid-day on 2018-09-30 (88 intervals on the old domain, 4 on
+# the new), so no instant is served by both and a union of the two
+# cannot collide.
+#
+# Deliberately not effective-dated. Trying the former domain only when
+# the current one came back empty needs no switchover date in the code,
+# so there is nothing here to fall out of step with what ENTSO-E
+# actually serves, and nothing to get wrong for a month that straddles a
+# boundary. The daily pipeline never requests dates this old and is
+# unaffected — it keeps using the configured domain and this module is
+# the only place that knows about former zones.
+FORMER_DOMAINS = {
+    "DE": "10Y1001A1001A63L",  # DE-AT-LU, until the split on 2018-10-01
+}
+
 ONE_DAY = timedelta(days=1)
 
 
@@ -266,10 +294,24 @@ def run_month(
             chunk_days=ENTSOE_CHUNK_DAYS,
             spark_writer=entsoe_sink,
         )
+        records = list(entsoe_sink.records)
+
+        retry_countries = _countries_to_retry_on_former_domain(
+            entsoe_countries, entsoe_result,
+        )
+        if retry_countries:
+            former_result, former_records = _retry_on_former_domains(
+                store, month_start, retry_countries,
+                token=token, start=entsoe_start, end=entsoe_end,
+                entsoe_ingestion_fn=entsoe_ingestion_fn,
+            )
+            entsoe_result = _merge_ingestion_results(entsoe_result, former_result)
+            records += former_records
+
         result.entsoe_rows = entsoe_result.records_written
         _record_entsoe(
             manifest, month_start, entsoe_countries, entsoe_result,
-            entsoe_sink.records, result,
+            records, result,
         )
 
     open_meteo_countries = _countries_with_pending(
@@ -290,6 +332,86 @@ def run_month(
         )
 
     return result
+
+
+def _countries_to_retry_on_former_domain(countries, ingestion_result):
+    """Countries whose every dataset came back empty and that once used
+    another domain.
+
+    Checked rather than caught: ENTSO-E answers a request under the
+    wrong domain with a clean "no matching data" acknowledgement, not an
+    error, so nothing is raised to catch — the outcome arrives as
+    `unavailable` in the result.
+
+    Only countries where *every* dataset was unavailable are retried. A
+    country reporting nothing at all for a whole month is what being
+    asked under the wrong domain looks like; one dataset missing while
+    the others returned data is a genuine gap in that series, and
+    re-asking under a former domain would not help.
+    """
+    retry = []
+    for country in countries:
+        former = FORMER_DOMAINS.get(country.country_code)
+        if not former:
+            continue
+        keys = [f"{country.country_code}:{d.name}" for d in ALL_DATASETS]
+        if all(k in ingestion_result.unavailable for k in keys):
+            retry.append(country)
+    return retry
+
+
+def _retry_on_former_domains(
+    store, month_start, countries, *, token, start, end, entsoe_ingestion_fn,
+):
+    """Re-request `countries` under the domain each one used to use."""
+    from src.config.entsoe import EntsoeCountryDomain
+
+    domains = {
+        c.country_code: EntsoeCountryDomain(
+            country_code=c.country_code,
+            domain=FORMER_DOMAINS[c.country_code],
+            validated=True,
+        )
+        for c in countries
+    }
+    logger.info(
+        "%s: retrying %s under former domain(s) %s",
+        month_id(month_start),
+        [c.country_code for c in countries],
+        {k: v.domain for k, v in domains.items()},
+    )
+
+    sink = _ParquetWriter(store, blob_writer.SOURCE_ENTSOE, month_start)
+    result = entsoe_ingestion_fn(
+        start, end,
+        token=token,
+        countries=list(countries),
+        domains=domains,
+        chunk_days=ENTSOE_CHUNK_DAYS,
+        spark_writer=sink,
+    )
+    return result, list(sink.records)
+
+
+def _merge_ingestion_results(first, second):
+    """Fold a former-domain retry back into the original result.
+
+    A combination that succeeded on the retry stops being unavailable:
+    the data exists, it was simply being asked for under the wrong code,
+    and leaving it marked unavailable would record a confirmed absence
+    that is not true.
+    """
+    recovered = set(second.succeeded)
+    first.succeeded.extend(second.succeeded)
+    first.unavailable = [k for k in first.unavailable if k not in recovered]
+    first.failed = [k for k in first.failed if k not in recovered]
+    for key in recovered:
+        first.errors.pop(key, None)
+    first.errors.update(
+        {k: v for k, v in second.errors.items() if k not in recovered}
+    )
+    first.records_written += second.records_written
+    return first
 
 
 def _record_entsoe(

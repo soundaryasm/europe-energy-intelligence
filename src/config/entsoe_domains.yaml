@@ -13,14 +13,23 @@
 # committed to production configuration." `validated: false` is an open
 # blocker, not a soft warning — there are none left below.
 #
-# KNOWN GAP: Germany's bidding zone changed on 2018-10-01 (confirmed via
-# the same probe). The domain below (DE-LU) is only correct from
-# 2018-10-01 onward; before that, Germany was part of a combined DE-AT-LU
-# zone (EIC 10Y1001A1001A63L). This single-domain-per-country schema does
-# not yet support an effective-dated mapping — that is a known,
-# deliberately deferred requirement for the future historical backfill
-# work (not needed for the current daily/recent-data pipeline, which
-# never requests pre-2018 data).
+# ZONE CHANGES: every domain below is the one its country uses now.
+# Where a country has changed bidding zone, the domain here holds
+# nothing for the years before the change, and ENTSO-E answers such a
+# request with a clean "no matching data" rather than an error.
+#
+# Germany is the case in hand: the domain below (DE-LU) is only correct
+# from 2018-10-01 onward, and before that Germany was part of the
+# combined DE-AT-LU zone (EIC 10Y1001A1001A63L). Verified against live
+# ENTSO-E on 2026-10-31, including the handover falling mid-day on
+# 2018-09-30.
+#
+# This schema is deliberately not effective-dated. Former domains are
+# handled by `src/blob/runner.FORMER_DOMAINS`, which retries a country
+# under its former domain only when the configured one came back empty
+# — so no switchover date is encoded anywhere, and nothing here can
+# fall out of step with what ENTSO-E serves. Only historical ingestion
+# needs this; the daily pipeline never requests dates that old.
 domains:
   - country_code: IE
     domain: "10Y1001A1001A59C"  # Ireland (SEM) bidding zone

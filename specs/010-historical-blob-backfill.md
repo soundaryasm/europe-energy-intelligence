@@ -119,6 +119,16 @@ The distinction that must be preserved is between a month the source confirmed h
 
 ENTSO-E provides that signal as an acknowledgement document. Open-Meteo provides none, so an empty weather month is always `failed`: a whole month with no weather is not a legitimate condition the way a missing market series can be.
 
+### Former Bidding Zones
+
+A country's configured ENTSO-E domain is the one it uses now. Where a country has changed bidding zone, that domain holds nothing for the years before the change, and ENTSO-E answers such a request with a clean "no matching data" acknowledgement rather than an error — so the month resolves as `unavailable` and looks settled when it is simply being asked under the wrong code.
+
+A country whose every dataset comes back empty for a month is therefore re-requested under the domain it previously used, where one is known. Data found that way is recorded as success, not left marked unavailable: the data exists, and recording a confirmed absence that is not true is worse than not asking.
+
+Only a country reporting nothing at all is retried. One dataset missing while the others returned data is a genuine gap in that series, and asking under a former domain would not help.
+
+No switchover date is encoded. Trying the former domain only when the current one came back empty means nothing can fall out of step with what the source actually serves, and a month straddling a boundary needs no special handling.
+
 ### Month Boundaries
 
 ENTSO-E requests are padded either side of the month so Silver can reconstruct complete local-timezone calendar dates at the edges.
@@ -187,3 +197,4 @@ Row counts reported by an invocation are rows that invocation wrote, not rows th
 19. Combinations skipped by an open circuit breaker appear in the run log.
 20. A non-success HTTP status is reported even when the response body cannot be interpreted.
 21. Reported row counts are rows written by that invocation.
+22. A country reporting nothing for a whole month is retried under its former bidding-zone domain, where one is known.
