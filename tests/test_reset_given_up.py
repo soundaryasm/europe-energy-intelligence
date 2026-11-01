@@ -8,6 +8,7 @@ from src.blob.manifest import (
     GIVE_UP_AFTER_ATTEMPTS,
     STATUS_FAILED,
     STATUS_GIVEN_UP,
+    STATUS_UNAVAILABLE,
     Manifest,
     combo_id,
 )
@@ -121,3 +122,47 @@ def test_a_filter_matching_nothing_is_reported_as_a_failure(store):
     _given_up_manifest(store, [IE_GEN])
 
     assert main(["--month", "1999-01"]) == 2
+
+
+IE_LOAD = combo_id("entsoe", "IE", "load")
+IE_PRICE = combo_id("entsoe", "IE", "price")
+
+
+def test_unavailable_is_left_alone_by_default(store):
+    # The source saying it has nothing is normally believed, so a plain
+    # --all must not disturb it.
+    manifest = Manifest()
+    manifest.record(DECEMBER, IE_LOAD, STATUS_UNAVAILABLE)
+    manifest.save(store)
+
+    assert main(["--all"]) == 0
+    assert Manifest.load(store).status(DECEMBER, IE_LOAD) == STATUS_UNAVAILABLE
+
+
+def test_include_unavailable_returns_it_to_the_walk(store):
+    # Ireland's case: twelve months recorded unavailable while the data
+    # sat under a domain code the config did not use.
+    manifest = Manifest()
+    manifest.record(DECEMBER, IE_LOAD, STATUS_UNAVAILABLE)
+    manifest.save(store)
+
+    assert main(["--all", "--include-unavailable"]) == 0
+    reloaded = Manifest.load(store)
+    assert reloaded.status(DECEMBER, IE_LOAD) == STATUS_FAILED
+    assert reloaded.attempts(DECEMBER, IE_LOAD) == 0
+
+
+def test_dataset_filter_resets_only_that_dataset(store):
+    manifest = _given_up_manifest(store, [IE_LOAD, IE_PRICE])
+
+    assert main(["--country", "IE", "--dataset", "load"]) == 0
+    reloaded = Manifest.load(store)
+    assert reloaded.status(DECEMBER, IE_LOAD) == STATUS_FAILED
+    assert reloaded.status(DECEMBER, IE_PRICE) == STATUS_GIVEN_UP
+
+
+def test_a_dataset_filter_matching_nothing_is_an_error(store):
+    _given_up_manifest(store, [IE_PRICE])
+
+    assert main(["--dataset", "load"]) == 2
+    assert Manifest.load(store).status(DECEMBER, IE_PRICE) == STATUS_GIVEN_UP

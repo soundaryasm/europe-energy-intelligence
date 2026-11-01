@@ -13,6 +13,15 @@
 # committed to production configuration." `validated: false` is an open
 # blocker, not a soft warning — there are none left below.
 #
+# IRELAND: the SEM code below serves price and generation but NOT load.
+# Irish load is published only under the EirGrid control area
+# 10YIE-1001A00010 (verified live 2026-11-01). The "validated via
+# repeated real Bronze ingestion" claim above was therefore never true
+# for IE load — that combination had zero rows and the gap was read as
+# an upstream absence for a year. Ireland is reached through
+# `src/blob/runner.FORMER_DOMAINS` like Germany, which despite the name
+# covers a concurrent per-dataset split as well as a historical change.
+#
 # ZONE CHANGES: every domain below is the one its country uses now.
 # Where a country has changed bidding zone, the domain here holds
 # nothing for the years before the change, and ENTSO-E answers such a

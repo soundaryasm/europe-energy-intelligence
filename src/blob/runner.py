@@ -94,6 +94,15 @@ OPEN_METEO_DATASET = "weather"
 # the only place that knows about former zones.
 FORMER_DOMAINS = {
     "DE": "10Y1001A1001A63L",  # DE-AT-LU, until the split on 2018-10-01
+    # Ireland publishes per dataset under two codes, not one before and
+    # one after a switchover: load lives only under the EirGrid control
+    # area below, while day-ahead price lives only under the SEM bidding
+    # zone in `entsoe_domains.yaml` (EirGrid answers ENERGY_PRICES with
+    # "no matching data"). Generation answers under both. Verified
+    # against live ENTSO-E on 2026-11-01 across every month the backfill
+    # had failed, 2016-04 through 2026-10. The retry unions the two
+    # responses, so each dataset is taken from whichever code holds it.
+    "IE": "10YIE-1001A00010",  # EirGrid control area; holds IE load
 }
 
 ONE_DAY = timedelta(days=1)
@@ -338,19 +347,24 @@ def run_month(
 def _countries_to_retry_on_former_domain(
     month_start, countries, ingestion_result, records,
 ):
-    """Countries whose every dataset came back empty and that once used
-    another domain.
+    """Countries with a dataset short of the month that also publish, or
+    once published, under another domain.
 
     Checked rather than caught: ENTSO-E answers a request under the
     wrong domain with a clean "no matching data" acknowledgement, not an
     error, so nothing is raised to catch — the outcome arrives as
     `unavailable` in the result.
 
-    Only countries where no dataset covered the whole month are
-    retried. That is what being asked under the wrong domain looks
-    like; one dataset short while the others covered the month is a
-    genuine gap in that series, and re-asking under a former domain
-    would not help.
+    A country is retried when any dataset fell short of covering the
+    whole month. An earlier version required every dataset to be empty,
+    on the reasoning that one dataset short while the others covered the
+    month is a genuine gap. Ireland disproves that: its load is only
+    published under the EirGrid control area while its price is only
+    published under the SEM bidding zone, so two datasets cover the
+    month under the configured code and the third is missing purely
+    because it is being asked for under the wrong one. Retrying on any
+    shortfall costs a few requests for a country-month whose gap really
+    is genuine, and recovers the ones that are not.
 
     The test is whole-month coverage, not the pipeline's own
     `succeeded` list. That list means "returned some rows", which is
@@ -369,7 +383,7 @@ def _countries_to_retry_on_former_domain(
         statuses = _entsoe_statuses(
             month_start, [country], ingestion_result, records,
         )
-        if not any(st == STATUS_SUCCESS for st in statuses.values()):
+        if any(st != STATUS_SUCCESS for st in statuses.values()):
             retry.append(country)
     return retry
 

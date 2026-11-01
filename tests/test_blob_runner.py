@@ -27,6 +27,7 @@ from tests.test_blob_store import FakeS3
 
 IRELAND = CountryConfig("IE", "Ireland", "Dublin", 53.3498, -6.2603, "Europe/Dublin")
 GERMANY = CountryConfig("DE", "Germany", "Berlin", 52.52, 13.405, "Europe/Berlin")
+FRANCE = CountryConfig("FR", "France", "Paris", 48.8566, 2.3522, "Europe/Paris")
 COUNTRIES = [IRELAND, GERMANY]
 
 # A run "today" of 2026-03-10, so the last complete month is 2026-02.
@@ -60,7 +61,8 @@ def _entsoe_fn(records_by_call=None, unavailable=None, errors=None, calls=None):
         if calls is not None:
             calls.append({"countries": [c.country_code for c in countries],
                           "start": start_date, "end": end_date,
-                          "domain": domains["DE"].domain if domains else "CONFIGURED"})
+                          "domain": next(iter(domains.values())).domain
+                                    if domains else "CONFIGURED"})
         records = list(records_by_call or [])
         written = spark_writer(None, records, "table") if records else 0
         return FakeResult(written, list(unavailable or []), dict(errors or {}))
@@ -433,6 +435,7 @@ def _de_rows(days, month=date(2026, 2, 1)):
 
 
 FORMER_DE = runner.FORMER_DOMAINS["DE"]
+FORMER_IE = runner.FORMER_DOMAINS["IE"]
 
 
 def test_a_country_reporting_nothing_is_retried_on_its_former_domain():
@@ -486,17 +489,20 @@ def test_no_retry_when_the_configured_domain_already_covered_the_month():
 
 
 def test_a_country_with_no_former_domain_is_never_retried():
+    # France has only ever used one domain, so an empty month is an
+    # empty month and there is nowhere else to ask.
+    assert "FR" not in runner.FORMER_DOMAINS
     month = date(2026, 2, 1)
     calls = []
 
     runner.run_month(
-        _store(), Manifest(), month, token="t", countries=[IRELAND],
+        _store(), Manifest(), month, token="t", countries=[FRANCE],
         entsoe_ingestion_fn=_entsoe_fn_by_domain({}, calls),
         open_meteo_ingestion_fn=_open_meteo_fn([]),
     )
 
     assert [c["domain"] for c in calls] == ["CONFIGURED"]
-    assert "IE" in calls[0]["countries"]
+    assert "FR" in calls[0]["countries"]
 
 
 def test_a_sliver_of_a_month_still_triggers_the_retry():
@@ -569,22 +575,38 @@ def test_a_partially_covered_month_also_triggers_the_retry():
     assert result.statuses[combo_id("entsoe", "DE", "load")] == STATUS_SUCCESS
 
 
-def test_a_single_missing_dataset_does_not_trigger_a_former_domain_retry():
-    # One series missing while the others returned data is a genuine gap
-    # in that series, not evidence of the wrong domain.
+def test_one_dataset_short_of_the_month_still_triggers_a_former_domain_retry():
+    # Ireland is the case in hand: load is published only under the
+    # EirGrid control area and price only under the SEM bidding zone, so
+    # a month is served partly by each code. Two datasets covering the
+    # month must not stop the third being asked for elsewhere, and the
+    # union of the two responses is what gets classified.
     month = date(2026, 2, 1)
     calls = []
 
     def run(start_date, end_date, *, token, countries, chunk_days, spark_writer, domains=None):
-        calls.append({"domain": domains["DE"].domain if domains else "CONFIGURED"})
-        rows = _entsoe_rows("DE", "load", _all_days(month), month)
+        dom = domains["IE"].domain if domains else "CONFIGURED"
+        calls.append({"domain": dom})
+        if dom == "CONFIGURED":
+            served, missing = ("generation", "price"), ["IE:load"]
+        else:
+            served, missing = ("load",), ["IE:generation", "IE:price"]
+        rows = [
+            r for dataset in served
+            for r in _entsoe_rows("IE", dataset, _all_days(month), month)
+        ]
         spark_writer(None, rows, "t")
-        return FakeResult(len(rows), ["DE:price"], {}, succeeded=["DE:load"])
+        return FakeResult(
+            len(rows), missing, {}, succeeded=[f"IE:{d}" for d in served],
+        )
 
-    runner.run_month(
-        _store(), Manifest(), month, token="t", countries=[GERMANY],
+    result = runner.run_month(
+        _store(), Manifest(), month, token="t", countries=[IRELAND],
         entsoe_ingestion_fn=run,
         open_meteo_ingestion_fn=_open_meteo_fn([]),
     )
 
-    assert [c["domain"] for c in calls] == ["CONFIGURED"]
+    assert [c["domain"] for c in calls] == ["CONFIGURED", FORMER_IE]
+    for dataset in ("load", "generation", "price"):
+        combo = combo_id("entsoe", "IE", dataset)
+        assert result.statuses[combo] == STATUS_SUCCESS

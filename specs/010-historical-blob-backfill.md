@@ -119,17 +119,21 @@ The distinction that must be preserved is between a month the source confirmed h
 
 ENTSO-E provides that signal as an acknowledgement document. Open-Meteo provides none, so an empty weather month is always `failed`: a whole month with no weather is not a legitimate condition the way a missing market series can be.
 
-### Former Bidding Zones
+### Alternative Domains
 
 A country's configured ENTSO-E domain is the one it uses now. Where a country has changed bidding zone, that domain holds nothing for the years before the change, and ENTSO-E answers such a request with a clean "no matching data" acknowledgement rather than an error — so the month resolves as `unavailable` and looks settled when it is simply being asked under the wrong code.
 
-A country whose every dataset comes back empty for a month is therefore re-requested under the domain it previously used, where one is known. Data found that way is recorded as success, not left marked unavailable: the data exists, and recording a confirmed absence that is not true is worse than not asking.
+A country with a dataset short of covering the month is therefore re-requested under the other domain it is known to use or to have used. Data found that way is recorded as success, not left marked unavailable: the data exists, and recording a confirmed absence that is not true is worse than not asking.
 
-Only a country where no dataset succeeded is retried. One dataset missing while the others returned data is a genuine gap in that series, and asking under a former domain would not help.
+The second code is not always a *former* one. Ireland publishes per dataset under two codes at the same time: load only under the EirGrid control area `10YIE-1001A00010`, day-ahead price only under the SEM bidding zone `10Y1001A1001A59C`, and generation under both. Verified against live ENTSO-E on 2026-11-01 for every month the backfill had failed, 2016-04 through 2026-10.
+
+A retry is therefore triggered by any dataset falling short, not only by all of them coming back empty. An earlier version required every dataset to be empty, reasoning that one series short while the others covered the month is a genuine gap in that series. Ireland disproves that: two datasets cover the month under the configured code while the third is missing purely because it is being asked for under the wrong one. Retrying on any shortfall costs a few requests for a country-month whose gap really is genuine, and recovers the ones that are not.
 
 The measure is whole-month coverage, not whether the source returned any rows. The month containing a switchover is served partly by each domain, so the current one returns a day or two and every dataset looks like it returned data while covering almost none of the month. Judging by "returned something" skips exactly the month that needs both domains. Records from the two requests are unioned before coverage is judged again, so a straddling month resolves as complete.
 
-No switchover date is encoded. Trying the former domain only when the current one came back empty means nothing can fall out of step with what the source actually serves, and a month straddling a boundary needs no special handling.
+No switchover date and no per-dataset domain map is encoded. Trying the second domain whenever the first fell short means nothing can fall out of step with what the source actually serves: a zone change, a per-dataset split and a month straddling a boundary all resolve the same way, by unioning what the two codes return.
+
+`unavailable` is consequently not final. It records what the source answered, which can be an artefact of how it was asked — Ireland's load sat unavailable for twelve months while the data was there under the other code. `scripts/reset_given_up.py --include-unavailable` returns such entries to the walk; it is deliberately opt-in, because the ordinary meaning of `unavailable` is still believed.
 
 ### Month Boundaries
 

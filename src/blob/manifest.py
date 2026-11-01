@@ -158,11 +158,23 @@ class Manifest:
 
     def given_up(self) -> List[Tuple[str, str]]:
         """Every `(month_id, combo)` currently given up, oldest month first."""
+        return self.with_status(STATUS_GIVEN_UP)
+
+    def with_status(self, *statuses: str) -> List[Tuple[str, str]]:
+        """Every `(month_id, combo)` at one of `statuses`, oldest month first.
+
+        `unavailable` is as final as `given_up` for the walker, so it
+        needs the same way back when the absence turns out to have been
+        our question rather than the source's answer — Ireland's load
+        was recorded unavailable for a year while the data sat under a
+        domain code the config did not use.
+        """
+        wanted = set(statuses)
         found = [
             (month_key, combo)
             for month_key, month in self._data.items()
             for combo, entry in month.items()
-            if entry.get("status") == STATUS_GIVEN_UP
+            if entry.get("status") in wanted
         ]
         return sorted(found)
 
