@@ -1,0 +1,96 @@
+# Historical Bronze load job definition (Spec 010).
+#
+# Brings the Parquet files the historical ingestion landed in blob
+# storage into Bronze, and verifies the result. Stops there: rebuilding
+# Silver and Gold over the widened history is a separate job
+# (historical_rebuild.yml), started by hand once this job's verify
+# output has been read.
+#
+# Split that way on purpose. Staging is a sequence of cheap, resumable
+# HTTP downloads; the merge is expensive and wants to be atomic; the
+# Silver/Gold rebuild is the single most expensive run in the project.
+# Running them as one job means a failure in any one of them costs the
+# work of all three — which, on a bounded compute allowance, is the
+# difference between retrying a step and losing a day.
+#
+# No schedule: this runs once, by hand, after the historical ingestion
+# reports that every month back to January 2015 is accounted for.
+#
+# Safe to re-run. Staged files are skipped, already-merged batches are
+# skipped, and the merge is keyed on each table's business key, so a
+# period already present is updated in place rather than duplicated.
+
+variables:
+  blob_secret_scope:
+    description: "Databricks secret scope holding the blob bucket token."
+    default: europe-energy-intelligence
+  volume_root:
+    description: "Unity Catalog volume path the historical Parquet files are staged into."
+    default: /Volumes/workspace/default/historical
+
+resources:
+  jobs:
+    europe_energy_intelligence_historical_bronze_load:
+      name: "European Energy Intelligence - Historical Bronze Load"
+
+      parameters:
+        - name: sources
+          default: ""
+        - name: resume
+          default: "true"
+
+      environments:
+        - environment_key: python_notebook_env
+          spec:
+            environment_version: "5"
+            dependencies:
+              - -r ${workspace.file_path}/requirements.txt
+
+      tasks:
+        - task_key: stage_historical
+          environment_key: python_notebook_env
+          notebook_task:
+            notebook_path: "${workspace.file_path}/notebooks/ingestion/stage_historical_to_volume"
+            base_parameters:
+              secret_scope: "${var.blob_secret_scope}"
+              secret_key: "UPSTASH_BLOB_TOKEN"
+              volume_root: "${var.volume_root}"
+              sources: "{{job.parameters.sources}}"
+              # See the notebook's own sys.path bootstrap comment for why.
+              bundle_root: "${workspace.file_path}"
+          # Network-bound rather than compute-bound: a few hundred small
+          # HTTPS downloads. Generous enough that a slow bucket does not
+          # fail the task, since a timeout here wastes the downloads
+          # already done.
+          timeout_seconds: 7200
+
+        - task_key: load_historical
+          environment_key: python_notebook_env
+          depends_on:
+            - task_key: stage_historical
+          notebook_task:
+            notebook_path: "${workspace.file_path}/notebooks/ingestion/load_historical_to_bronze"
+            base_parameters:
+              volume_root: "${var.volume_root}"
+              sources: "{{job.parameters.sources}}"
+              resume: "{{job.parameters.resume}}"
+              bundle_root: "${workspace.file_path}"
+          timeout_seconds: 10800
+          # No task-level retry. A failure here needs looking at before
+          # being repeated — the load reports which batches failed, and
+          # a blind retry just re-merges what already succeeded.
+
+        - task_key: verify_historical
+          environment_key: python_notebook_env
+          depends_on:
+            - task_key: load_historical
+          notebook_task:
+            notebook_path: "${workspace.file_path}/notebooks/ingestion/verify_historical_bronze"
+            base_parameters:
+              volume_root: "${var.volume_root}"
+              sources: "{{job.parameters.sources}}"
+              bundle_root: "${workspace.file_path}"
+          # A left-anti join per source over the full staged history.
+          timeout_seconds: 7200
+
+      email_notifications: {}

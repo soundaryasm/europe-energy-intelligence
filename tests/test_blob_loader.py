@@ -1,191 +1,358 @@
-"""Tests for loading the historical Parquet layer into Bronze (Spec 010).
+"""Tests for merging the staged historical layer into Bronze (Spec 010).
 
-Spark is the external system here and is replaced with a double; the
-Parquet round-trip is real, since the file format is the contract
-between the two halves of this layer.
+Spark is the external system here and is replaced with a double. What
+these tests pin down is the loader's own logic: which batches it finds,
+what order it merges them in, what it records, and what it does when one
+of them fails.
 """
-from datetime import date
+import json
 
 import pytest
 
-from src.blob import loader, writer
-from src.blob.store import BlobStore
-from tests.test_blob_store import FakeS3
+from src.blob import loader, stager, writer
 
-
-def _store(objects=None):
-    client = FakeS3(objects)
-    return BlobStore(
-        token="tok",
-        credentials_fn=lambda _t: {
-            "endpoint": "https://example.invalid", "bucket": "b",
-            "accessKeyId": "ak", "secretAccessKey": "sk",
-            "sessionToken": "st", "expiresAt": 10**12,
-        },
-        client_factory=lambda _c: client,
-    )
-
-
-def _weather_row(country, day):
-    return {
-        "country_code": country, "country_name": "Name", "reference_location": "City",
-        "latitude": 1.0, "longitude": 2.0, "timezone": "UTC",
-        "returned_latitude": 1.0, "returned_longitude": 2.0, "returned_timezone": "UTC",
-        "utc_offset_seconds": 0, "observation_date": day,
-        "source_variable": "temperature_2m_mean", "source_value": 1.0, "source_unit": "C",
-        "source_endpoint": "archive_daily", "source_system": "open-meteo",
-        "ingestion_timestamp": "2026-01-01T00:00:00+00:00",
-    }
-
-
-def test_parse_key_identifies_a_monthly_source_and_period():
-    key = "europe-energy/entsoe/year=2024/month=03.parquet"
-
-    assert loader.parse_key(key) == ("entsoe", "2024-03")
-
-
-def test_parse_key_identifies_an_annual_source_and_period():
-    key = "europe-energy/worldbank/year=2024.parquet"
-
-    assert loader.parse_key(key) == ("worldbank", "2024")
-
-
-def test_parse_key_ignores_the_manifest():
-    # The manifest lives under the same prefix and must never be loaded
-    # as data.
-    assert loader.parse_key("europe-energy/_manifest.json") is None
-
-
-def test_parse_key_ignores_an_unknown_source():
-    assert loader.parse_key("europe-energy/other/year=2024/month=01.parquet") is None
-
-
-class FakeSpark:
-    """Records the DataFrames it was asked to build."""
-
-    def __init__(self):
-        self.frames = []
-
-    def createDataFrame(self, records, schema=None):  # noqa: N802 - Spark API name
-        frame = FakeFrame(records)
-        self.frames.append(frame)
-        return frame
+# --- doubles ---------------------------------------------------------
 
 
 class FakeFrame:
-    def __init__(self, records):
-        self.records = records
+    """Records the selections asked of it; carries a declared row count."""
+
+    def __init__(self, path, rows=1):
+        self.path = path
+        self.rows = rows
+        self.selected = None
+
+    def select(self, *cols):
+        self.selected = list(cols)
+        return self
 
 
-def _patch_spark_path(monkeypatch, written):
-    """Replace the Delta write and the dedupe with doubles."""
+class FakeReader:
+    def __init__(self, spark):
+        self._spark = spark
+
+    def parquet(self, path):
+        frame = FakeFrame(path, self._spark.rows_per_batch)
+        self._spark.read_paths.append(path)
+        return frame
+
+
+class FakeSpark:
+    def __init__(self, rows_per_batch=1):
+        self.read_paths = []
+        self.rows_per_batch = rows_per_batch
+
+    @property
+    def read(self):
+        return FakeReader(self)
+
+
+@pytest.fixture
+def spark_path(monkeypatch):
+    """Replace the Delta write, the dedupe and the schema builders."""
+    written = []
+
     import src.ingestion.delta_schema as delta_schema
     import src.transformations.dedupe as dedupe
 
     monkeypatch.setattr(
         delta_schema, "write_with_deterministic_schema",
         lambda spark, df, table, schema, keys: (
-            written.append((table, len(df.records))), len(df.records)
+            written.append((table, df)), df.rows
         )[1],
         raising=False,
     )
     monkeypatch.setattr(dedupe, "dedupe_latest", lambda df, keys: df, raising=False)
-    # The schema builders need PySpark; the double does not use the
-    # schema, so they are replaced too.
+
+    class FakeField:
+        def __init__(self, name):
+            self.name = name
+
+    class FakeSchema:
+        fields = [FakeField("country_code"), FakeField("observation_date")]
+
     for name in ("entsoe_bronze_schema", "open_meteo_bronze_schema", "worldbank_bronze_schema"):
-        monkeypatch.setattr(delta_schema, name, lambda: None, raising=False)
+        monkeypatch.setattr(delta_schema, name, lambda: FakeSchema(), raising=False)
+    return written
 
 
-def test_load_file_merges_a_month_into_its_bronze_table(monkeypatch):
-    written = []
-    _patch_spark_path(monkeypatch, written)
-
-    store = _store()
-    rows = [_weather_row("IE", "2024-03-01"), _weather_row("DE", "2024-03-01")]
-    writer.write_month(store, writer.SOURCE_OPEN_METEO, date(2024, 3, 1), rows)
-    key = store.key(writer.month_key(writer.SOURCE_OPEN_METEO, date(2024, 3, 1)))
-
-    count = loader.load_file(FakeSpark(), store, key, writer.SOURCE_OPEN_METEO)
-
-    assert count == 2
-    assert written == [("bronze_open_meteo_weather", 2)]
+def _stage(volume_root, source, year, names=("01",)):
+    """Create the files a staging pass would have left behind."""
+    directory = volume_root / source / f"{year:04d}"
+    directory.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (directory / f"{name}.parquet").write_bytes(b"parquet")
 
 
-def test_load_file_raises_if_the_key_vanished_after_listing():
-    with pytest.raises(FileNotFoundError):
-        loader.load_file(FakeSpark(), _store(), "europe-energy/gone.parquet", "entsoe")
+# --- batch discovery -------------------------------------------------
 
 
-def test_load_all_loads_oldest_period_first(monkeypatch):
+def test_discover_batches_finds_one_batch_per_source_year(tmp_path):
+    _stage(tmp_path, writer.SOURCE_ENTSOE, 2015, ("01", "02"))
+    _stage(tmp_path, writer.SOURCE_ENTSOE, 2016)
+
+    assert loader.discover_batches(str(tmp_path)) == [
+        (writer.SOURCE_ENTSOE, 2015), (writer.SOURCE_ENTSOE, 2016),
+    ]
+
+
+def test_discover_batches_orders_by_year_across_sources(tmp_path):
+    # The whole load advances through history together rather than
+    # finishing one source's decade before starting the next.
+    _stage(tmp_path, writer.SOURCE_ENTSOE, 2016)
+    _stage(tmp_path, writer.SOURCE_OPEN_METEO, 2015)
+
+    assert loader.discover_batches(str(tmp_path)) == [
+        (writer.SOURCE_OPEN_METEO, 2015), (writer.SOURCE_ENTSOE, 2016),
+    ]
+
+
+def test_discover_batches_ignores_non_year_directories(tmp_path):
+    # The load state file lives at the volume root, and a stray
+    # directory must not be read as a batch.
+    _stage(tmp_path, writer.SOURCE_ENTSOE, 2015)
+    (tmp_path / writer.SOURCE_ENTSOE / "scratch").mkdir()
+
+    assert loader.discover_batches(str(tmp_path)) == [(writer.SOURCE_ENTSOE, 2015)]
+
+
+def test_discover_batches_is_empty_when_nothing_is_staged(tmp_path):
+    assert loader.discover_batches(str(tmp_path)) == []
+
+
+def test_discover_batches_can_be_narrowed_to_one_source(tmp_path):
+    _stage(tmp_path, writer.SOURCE_ENTSOE, 2015)
+    _stage(tmp_path, writer.SOURCE_OPEN_METEO, 2015)
+
+    batches = loader.discover_batches(str(tmp_path), sources=[writer.SOURCE_ENTSOE])
+
+    assert batches == [(writer.SOURCE_ENTSOE, 2015)]
+
+
+# --- merging ---------------------------------------------------------
+
+
+def test_load_batch_reads_the_whole_year_in_one_go(tmp_path, spark_path):
+    # A year is the batch, not a month: the merge is the expensive half,
+    # so twelve months are merged in one operation.
+    _stage(tmp_path, writer.SOURCE_ENTSOE, 2015, ("01", "02", "03"))
+    spark = FakeSpark(rows_per_batch=300)
+
+    rows = loader.load_batch(spark, writer.SOURCE_ENTSOE, 2015, str(tmp_path))
+
+    assert rows == 300
+    assert spark.read_paths == [f"{tmp_path}/entsoe/2015"]
+
+
+def test_load_batch_selects_the_schema_columns_explicitly_before_merging(tmp_path, spark_path):
+    # write_with_deterministic_schema compares positionally, so a
+    # reordering in the file would otherwise be silent.
+    _stage(tmp_path, writer.SOURCE_ENTSOE, 2015)
+
+    loader.load_batch(FakeSpark(), writer.SOURCE_ENTSOE, 2015, str(tmp_path))
+
+    table, frame = spark_path[0]
+    assert table == "bronze_entsoe_energy"
+    assert frame.selected == ["country_code", "observation_date"]
+
+
+def test_load_batch_merges_into_the_source_s_bronze_table(tmp_path, spark_path):
+    _stage(tmp_path, writer.SOURCE_OPEN_METEO, 2015)
+
+    loader.load_batch(FakeSpark(), writer.SOURCE_OPEN_METEO, 2015, str(tmp_path))
+
+    assert spark_path[0][0] == "bronze_open_meteo_weather"
+
+
+def test_load_all_merges_oldest_year_first(tmp_path, spark_path):
     # Oldest first so a pass interrupted part-way leaves Bronze holding
     # a contiguous history rather than islands.
-    written = []
-    _patch_spark_path(monkeypatch, written)
+    for year in (2017, 2015, 2016):
+        _stage(tmp_path, writer.SOURCE_ENTSOE, year)
 
-    store = _store()
-    for month in (date(2024, 5, 1), date(2024, 1, 1), date(2024, 3, 1)):
-        writer.write_month(
-            store, writer.SOURCE_OPEN_METEO, month,
-            [_weather_row("IE", month.isoformat())],
-        )
+    result = loader.load_all(FakeSpark(), str(tmp_path))
 
-    order = []
-    original = loader.load_file
-
-    def spy(spark, s, key, source, **kwargs):
-        order.append(loader.parse_key(key)[1])
-        return original(spark, s, key, source, **kwargs)
-
-    monkeypatch.setattr(loader, "load_file", spy)
-    result = loader.load_all(FakeSpark(), store)
-
-    assert order == ["2024-01", "2024-03", "2024-05"]
-    assert result.files_loaded == 3
+    assert [frame.path for _table, frame in spark_path] == [
+        f"{tmp_path}/entsoe/2015", f"{tmp_path}/entsoe/2016", f"{tmp_path}/entsoe/2017",
+    ]
+    assert result.batches_loaded == 3
 
 
-def test_load_all_skips_non_data_keys(monkeypatch):
-    _patch_spark_path(monkeypatch, [])
-    store = _store()
-    store.put(store.key("_manifest.json"), b"{}", content_type="application/json")
+def test_load_all_sums_rows_per_source(tmp_path, spark_path):
+    _stage(tmp_path, writer.SOURCE_ENTSOE, 2015)
+    _stage(tmp_path, writer.SOURCE_ENTSOE, 2016)
 
-    result = loader.load_all(FakeSpark(), store)
+    result = loader.load_all(FakeSpark(rows_per_batch=100), str(tmp_path))
 
-    assert result.files_loaded == 0
-    assert result.files_skipped == 1
+    assert result.rows_by_source == {writer.SOURCE_ENTSOE: 200}
 
 
-def test_load_all_can_be_narrowed_to_one_source(monkeypatch):
-    _patch_spark_path(monkeypatch, [])
-    store = _store()
-    writer.write_month(
-        store, writer.SOURCE_OPEN_METEO, date(2024, 3, 1), [_weather_row("IE", "2024-03-01")],
+def test_one_bad_batch_does_not_stop_the_pass(tmp_path, spark_path, monkeypatch):
+    # One bad year must not stop the rest of a decade from loading.
+    _stage(tmp_path, writer.SOURCE_ENTSOE, 2015)
+    _stage(tmp_path, writer.SOURCE_ENTSOE, 2016)
+
+    original = loader.load_batch
+
+    def flaky(spark, source, year, volume_root, **kwargs):
+        if year == 2015:
+            raise RuntimeError("unreadable")
+        return original(spark, source, year, volume_root, **kwargs)
+
+    monkeypatch.setattr(loader, "load_batch", flaky)
+    result = loader.load_all(FakeSpark(), str(tmp_path))
+
+    assert result.batches_loaded == 1
+    assert list(result.errors) == ["entsoe:2015"]
+    assert not result.succeeded
+
+
+# --- resume state ----------------------------------------------------
+
+
+def test_a_merged_batch_is_recorded_in_the_load_state(tmp_path, spark_path):
+    _stage(tmp_path, writer.SOURCE_ENTSOE, 2015)
+
+    loader.load_all(FakeSpark(rows_per_batch=42), str(tmp_path))
+
+    state = json.loads((tmp_path / loader.LOAD_STATE_FILENAME).read_text())
+    assert state["entsoe:2015"]["rows"] == 42
+    assert "loaded_at" in state["entsoe:2015"]
+
+
+def test_an_already_merged_batch_is_skipped_on_the_next_pass(tmp_path, spark_path):
+    # The merge is idempotent, so this is an optimisation — but
+    # re-merging a decade to retry one year costs compute that is in
+    # genuinely short supply.
+    _stage(tmp_path, writer.SOURCE_ENTSOE, 2015)
+    loader.load_all(FakeSpark(), str(tmp_path))
+
+    result = loader.load_all(FakeSpark(), str(tmp_path))
+
+    assert result.batches_loaded == 0
+    assert result.batches_skipped == 1
+
+
+def test_resume_can_be_turned_off_to_force_a_re_merge(tmp_path, spark_path):
+    _stage(tmp_path, writer.SOURCE_ENTSOE, 2015)
+    loader.load_all(FakeSpark(), str(tmp_path))
+
+    result = loader.load_all(FakeSpark(), str(tmp_path), resume=False)
+
+    assert result.batches_loaded == 1
+    assert result.batches_skipped == 0
+
+
+def test_a_failed_batch_is_not_recorded_as_loaded(tmp_path, spark_path, monkeypatch):
+    _stage(tmp_path, writer.SOURCE_ENTSOE, 2015)
+
+    monkeypatch.setattr(
+        loader, "load_batch",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    loader.load_all(FakeSpark(), str(tmp_path))
+
+    state = loader.LoadState.load(str(tmp_path))
+    fingerprint = loader.batch_fingerprint(str(tmp_path), writer.SOURCE_ENTSOE, 2015)
+    assert not state.is_loaded(writer.SOURCE_ENTSOE, 2015, fingerprint)
+
+
+def test_state_is_saved_after_every_batch_not_at_the_end(tmp_path, spark_path, monkeypatch):
+    # A pass that dies after merging eight years must not lose the
+    # record of those eight.
+    for year in (2015, 2016):
+        _stage(tmp_path, writer.SOURCE_ENTSOE, year)
+
+    original = loader.load_batch
+
+    def dies_on_the_second(spark, source, year, volume_root, **kwargs):
+        if year == 2016:
+            raise KeyboardInterrupt("killed mid-pass")
+        return original(spark, source, year, volume_root, **kwargs)
+
+    monkeypatch.setattr(loader, "load_batch", dies_on_the_second)
+    with pytest.raises(KeyboardInterrupt):
+        loader.load_all(FakeSpark(), str(tmp_path))
+
+    state = loader.LoadState.load(str(tmp_path))
+    fingerprint = loader.batch_fingerprint(str(tmp_path), writer.SOURCE_ENTSOE, 2015)
+    assert state.is_loaded(writer.SOURCE_ENTSOE, 2015, fingerprint)
+
+
+def test_load_state_of_a_fresh_volume_is_empty(tmp_path):
+    state = loader.LoadState.load(str(tmp_path))
+
+    assert not state.is_loaded(writer.SOURCE_ENTSOE, 2015, {})
+
+
+def test_bronze_table_can_be_prefixed_for_a_test_run():
+    assert loader.bronze_table(writer.SOURCE_ENTSOE, "sandbox_") == (
+        "sandbox_bronze_entsoe_energy"
     )
 
-    result = loader.load_all(FakeSpark(), store, sources=[writer.SOURCE_ENTSOE])
 
-    assert result.files_loaded == 0
-    assert result.files_skipped == 1
+# --- a year that grows after being merged ----------------------------
 
 
-def test_one_unreadable_file_does_not_stop_the_pass(monkeypatch):
-    # One bad month must not stop the rest of a decade from loading.
-    _patch_spark_path(monkeypatch, [])
-    store = _store()
-    for month in (date(2024, 1, 1), date(2024, 2, 1)):
-        writer.write_month(
-            store, writer.SOURCE_OPEN_METEO, month, [_weather_row("IE", month.isoformat())],
-        )
+def test_a_year_that_gains_a_month_is_merged_again(tmp_path, spark_path):
+    # The case this exists for: the current year is merged, then the
+    # next month's file is staged into it. Keyed on the year alone, the
+    # batch would be skipped forever and that month would never reach
+    # Bronze — with no error and a green run.
+    _stage(tmp_path, writer.SOURCE_ENTSOE, 2026, ("01", "02"))
+    loader.load_all(FakeSpark(), str(tmp_path))
 
-    original = loader.load_file
+    _stage(tmp_path, writer.SOURCE_ENTSOE, 2026, ("03",))
+    result = loader.load_all(FakeSpark(), str(tmp_path))
 
-    def flaky(spark, s, key, source, **kwargs):
-        if "month=01" in key:
-            raise RuntimeError("corrupt")
-        return original(spark, s, key, source, **kwargs)
+    assert result.batches_loaded == 1
+    assert result.batches_skipped == 0
 
-    monkeypatch.setattr(loader, "load_file", flaky)
-    result = loader.load_all(FakeSpark(), store)
 
-    assert result.files_loaded == 1
-    assert len(result.errors) == 1
-    assert not result.succeeded
+def test_a_year_whose_month_was_re_staged_at_a_new_size_is_merged_again(tmp_path, spark_path):
+    # A month re-fetched with more countries in it is a different file,
+    # not a different name.
+    _stage(tmp_path, writer.SOURCE_ENTSOE, 2015, ("01",))
+    loader.load_all(FakeSpark(), str(tmp_path))
+
+    (tmp_path / "entsoe" / "2015" / "01.parquet").write_bytes(b"parquet with more rows")
+    result = loader.load_all(FakeSpark(), str(tmp_path))
+
+    assert result.batches_loaded == 1
+
+
+def test_an_unchanged_year_is_still_skipped(tmp_path, spark_path):
+    _stage(tmp_path, writer.SOURCE_ENTSOE, 2015, ("01", "02"))
+    loader.load_all(FakeSpark(), str(tmp_path))
+
+    result = loader.load_all(FakeSpark(), str(tmp_path))
+
+    assert result.batches_loaded == 0
+    assert result.batches_skipped == 1
+
+
+def test_the_fingerprint_records_every_staged_file_and_its_size(tmp_path):
+    _stage(tmp_path, writer.SOURCE_ENTSOE, 2015, ("01", "02"))
+
+    fingerprint = loader.batch_fingerprint(str(tmp_path), writer.SOURCE_ENTSOE, 2015)
+
+    assert fingerprint == {"01.parquet": 7, "02.parquet": 7}
+
+
+def test_the_fingerprint_ignores_non_parquet_files(tmp_path):
+    _stage(tmp_path, writer.SOURCE_ENTSOE, 2015, ("01",))
+    (tmp_path / "entsoe" / "2015" / "01.parquet.part").write_bytes(b"truncated")
+
+    fingerprint = loader.batch_fingerprint(str(tmp_path), writer.SOURCE_ENTSOE, 2015)
+
+    assert list(fingerprint) == ["01.parquet"]
+
+
+def test_a_state_entry_without_a_fingerprint_counts_as_not_loaded(tmp_path):
+    # Re-merging is idempotent; wrongly skipping is not recoverable.
+    state = loader.LoadState(
+        str(tmp_path / loader.LOAD_STATE_FILENAME),
+        {"entsoe:2015": {"rows": 10, "loaded_at": "2026-01-01T00:00:00+00:00"}},
+    )
+
+    assert not state.is_loaded(writer.SOURCE_ENTSOE, 2015, {"01.parquet": 7})

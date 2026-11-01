@@ -149,17 +149,49 @@ The bucket token and the ENTSO-E token come from the environment. Neither is eve
 
 Run once, by hand, after the ingestion reports that every month is accounted for.
 
-Every Parquet file is read and merged into its Bronze table, oldest period first. Oldest first so a pass interrupted part-way leaves Bronze holding a contiguous history rather than islands.
+The load is two jobs, not one: a Bronze load, and a Silver/Gold rebuild started separately once the Bronze load's verification has been read. Each of the three stages involved fails differently — staging is a sequence of cheap, resumable downloads, the merge is expensive and wants to be atomic, and the rebuild is the single most expensive run in the project. Running them together means a failure in any one costs the work of all three, which on a bounded compute allowance is the difference between retrying a step and losing a day.
 
-Files are fetched over HTTPS into the driver and read from there, rather than registered as an external table: the bucket is not a Unity Catalog external location, and a month's file is a few megabytes, so the download costs less than the configuration it would otherwise need.
+### Staging
 
-The merge is the same deterministic-schema path the daily pipeline uses, keyed on the same Bronze business key. Loading a month that is already present therefore updates those rows in place instead of duplicating them, which is what makes the load safe to re-run and safe to run against Bronze tables that already hold overlapping history.
+Every Parquet file is copied, byte for byte, from blob storage onto a Unity Catalog volume. Nothing is parsed and only one file is held in memory at a time, so the stage's cost is bounded by network time rather than by the size of the dataset.
 
-A file that fails to load is recorded and the pass continues — one unreadable month must not stop the rest of a decade. The task then fails rather than reporting success with a gap.
+The files are copied in rather than referenced where they lie because the bucket is not a Unity Catalog external location.
+
+Spark then reads the Parquet off the volume itself. The driver never holds a row. Materialising a decade of history as Python objects to hand to `createDataFrame` would move the entire dataset through one process, and the largest single month would be the peak memory of the whole load.
+
+A file is written under a `.part` suffix and renamed into place only when complete. A file at its final path is therefore always whole, which is what makes "skip what is already staged" a safe resumption rule rather than a way to inherit a truncated download.
+
+Staged paths drop the `year=`/`month=` syntax the blob keys use. Spark reads a directory tree of that shape as a Hive-partitioned dataset and synthesises a `year` column from the directory name, which would no longer match the Bronze schema.
+
+### Merging
+
+A batch is one source-year. The merge, not the read, is the expensive half: a year is small enough to merge in one operation while still being a unit worth resuming from, and it replaces one merge per month with one per year.
+
+Years are merged oldest first, so a pass interrupted part-way leaves Bronze holding a contiguous history rather than islands.
+
+The merge is the same deterministic-schema path the daily pipeline uses, keyed on the same Bronze business key. A period already present is therefore updated in place rather than duplicated, which is what makes the load safe to re-run and safe to run against Bronze tables that already hold overlapping history. Rows Bronze holds that the staged files do not are left untouched — a MERGE never deletes.
+
+Where the two overlap, the staged row wins and the Bronze row's `ingestion_timestamp` is rewritten. Both sides read the same source for the same window, so the values are otherwise identical, and Bronze is raw landing data.
+
+Which batches have been merged is recorded in explicit state on the volume, never inferred from Bronze row counts: Bronze also holds rows the daily pipeline wrote, so a count cannot distinguish "this batch was merged" from "some of these rows arrived another way". Because the merge is idempotent, this state is an optimisation rather than a correctness mechanism — it exists so that retrying one year does not re-merge a decade.
+
+State is saved after every batch. A pass that dies after merging eight years must not lose the record of those eight.
+
+A batch that fails to merge is recorded and the pass continues — one bad year must not stop the rest of a decade. The task then fails rather than reporting success with a gap.
+
+### Verifying
+
+The load reports what it merged; the verification checks the result independently, by asking whether any row on the volume has a merge key absent from Bronze.
+
+That is a left-anti join, not a row count. Counts cannot answer it: Bronze is legitimately larger than the staged set, because the daily pipeline wrote some of its rows, so two numbers failing to match proves nothing in either direction. A missing key is unambiguous.
+
+A missing Bronze table is an error, not a pass. An absent table means the load never ran, and that must not read as "nothing is missing".
 
 ### After The Load
 
-The load job rebuilds Silver and Gold over the widened history and republishes the serving layer.
+Silver and Gold are rebuilt over the widened history and the serving layer republished, as a separate job started by hand. The verification output is meant to be read by a person first: a decade of Silver plus a full dbt build should not start on a Bronze that is quietly short of a year.
+
+What that job publishes to PostgreSQL is scoped separately. PostgreSQL is a serving layer, not storage, and the full history is far larger than it should hold.
 
 `dim_date` must cover the full historical range, or fact rows will have no matching dimension row and the Gold relationship tests will fail.
 
@@ -193,10 +225,16 @@ Row counts reported by an invocation are rows that invocation wrote, not rows th
 13. Re-running a year produces the same files, not additional ones.
 14. Blob credentials are re-minted as needed for the life of an invocation.
 15. Concurrent invocations are prevented, regardless of how often a dispatch arrives.
-16. Loading the same month into Bronze twice does not duplicate records.
-17. A single unreadable file does not stop the load pass, and the task still fails.
+16. Loading the same period into Bronze twice does not duplicate records, and never deletes rows Bronze alone holds.
+17. A single unreadable file stops neither the staging pass nor the merge pass, and the task still fails.
 18. The ingestion reuses the daily workflow's ingestion modules rather than reimplementing them.
 19. Combinations skipped by an open circuit breaker appear in the run log.
 20. A non-success HTTP status is reported even when the response body cannot be interpreted.
 21. Reported row counts are rows written by that invocation.
 22. A country reporting nothing for a whole month is retried under its former bidding-zone domain, where one is known.
+21. Staging is resumable: an already-staged file is skipped, and a partially written one is not mistaken for a complete one.
+22. Spark reads the staged Parquet directly; no row passes through the driver.
+23. Staged paths cannot be read by Spark as Hive partitions.
+24. Bronze is merged one source-year at a time, oldest first, with progress recorded after each.
+25. The Bronze load and the Silver/Gold rebuild are separate jobs with no dependency between them.
+26. The load is verified by merge-key absence, not by comparing row counts.
