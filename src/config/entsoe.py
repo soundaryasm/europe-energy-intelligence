@@ -20,6 +20,31 @@ class EntsoeConfigError(ValueError):
     """Raised when the ENTSO-E domain configuration is missing or invalid."""
 
 
+# A country's configured domain is the one `entsoe_domains.yaml` holds.
+# These are the second code to ask under when the configured one comes
+# back with nothing — either because the country has changed bidding
+# zone, or because it publishes different datasets under different codes
+# at the same time.
+#
+# Kept here rather than in either pipeline because both need it: the
+# historical walk retries a month the configured code left short of
+# coverage, and the daily run retries a dataset the configured code
+# reported no data for. One map, two callers.
+ALTERNATIVE_DOMAINS: Dict[str, str] = {
+    # DE-AT-LU, the zone Germany belonged to until the split on
+    # 2018-10-01. Verified against live ENTSO-E on 2026-10-31, including
+    # the handover falling mid-day on 2018-09-30.
+    "DE": "10Y1001A1001A63L",
+    # The EirGrid control area. Not a former zone: Ireland publishes
+    # load only under this code and day-ahead price only under the SEM
+    # bidding zone in the yaml, concurrently, with generation under
+    # both. Verified against live ENTSO-E on 2026-11-01 for every month
+    # the historical backfill had failed, 2016-04 through 2026-10, where
+    # the SEM code returns four points a month or nothing at all.
+    "IE": "10YIE-1001A00010",
+}
+
+
 @dataclass(frozen=True)
 class EntsoeCountryDomain:
     country_code: str

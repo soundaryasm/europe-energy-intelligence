@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.config.countries import CountryConfig
-from src.config.entsoe import EntsoeCountryDomain
+from src.config.entsoe import ALTERNATIVE_DOMAINS, EntsoeCountryDomain
 from src.ingestion.entsoe_client import EntsoeAPIError, EntsoeNoDataError
 from src.ingestion.entsoe_datasets import GENERATION, LOAD, PRICE
 from src.ingestion.entsoe_pipeline import (
@@ -419,3 +419,136 @@ def test_breaker_threshold_tolerates_a_minority_of_countries_failing():
     from src.ingestion.entsoe_pipeline import DEFAULT_CIRCUIT_BREAKER_THRESHOLD
 
     assert DEFAULT_CIRCUIT_BREAKER_THRESHOLD == 5
+
+
+# --- Alternative domains in the daily path ----------------------------
+#
+# Ireland publishes load only under the EirGrid control area, so the
+# daily run recorded no Irish load for a year while the data was there.
+
+IE_ALTERNATIVE = ALTERNATIVE_DOMAINS["IE"]
+
+
+def _fetch_load_only_on(domain):
+    """ENTSO-E as it really answers: load exists under one code only."""
+    def fetch_fn(request, **_):
+        if request.dataset.name == "load" and request.domain != domain:
+            raise EntsoeNoDataError("no matching data found")
+        return XML_BY_DATASET[request.dataset.name]
+    return fetch_fn
+
+
+def test_a_dataset_with_no_data_is_retried_on_the_alternative_domain():
+    spark_writer = MagicMock(return_value=6)
+
+    result = run_ingestion(
+        date(2024, 1, 1), date(2024, 1, 1),
+        token="tok",
+        spark=MagicMock(),
+        countries=[IRELAND],
+        datasets=DATASETS,
+        fetch_fn=_fetch_load_only_on(IE_ALTERNATIVE),
+        spark_writer=spark_writer,
+    )
+
+    assert result.unavailable == []
+    assert "IE:load" in result.succeeded
+    written = spark_writer.call_args[0][1]
+    assert any(r["dataset_type"] == "load" for r in written)
+    assert {r["domain"] for r in written if r["dataset_type"] == "load"} == {
+        IE_ALTERNATIVE,
+    }
+
+
+def test_a_dataset_empty_under_both_domains_stays_unavailable():
+    # The retry must not turn a real absence into anything else.
+    def fetch_fn(request, **_):
+        if request.dataset.name == "load":
+            raise EntsoeNoDataError("no matching data found")
+        return XML_BY_DATASET[request.dataset.name]
+
+    result = run_ingestion(
+        date(2024, 1, 1), date(2024, 1, 1),
+        token="tok",
+        spark=MagicMock(),
+        countries=[IRELAND],
+        datasets=DATASETS,
+        fetch_fn=fetch_fn,
+        spark_writer=MagicMock(return_value=4),
+    )
+
+    assert result.unavailable == ["IE:load"]
+    assert result.all_succeeded is True
+
+
+def test_a_failed_dataset_is_not_retried_on_the_alternative_domain():
+    # A timeout says nothing about the domain being wrong.
+    domains_asked = []
+
+    def fetch_fn(request, **_):
+        domains_asked.append((request.dataset.name, request.domain))
+        if request.dataset.name == "load":
+            raise EntsoeAPIError("load feed timed out")
+        return XML_BY_DATASET[request.dataset.name]
+
+    result = run_ingestion(
+        date(2024, 1, 1), date(2024, 1, 1),
+        token="tok",
+        spark=MagicMock(),
+        countries=[IRELAND],
+        datasets=DATASETS,
+        fetch_fn=fetch_fn,
+        spark_writer=MagicMock(return_value=4),
+    )
+
+    assert result.failed == ["IE:load"]
+    assert IE_ALTERNATIVE not in [d for _, d in domains_asked]
+
+
+def test_an_explicit_domain_suppresses_the_fallback():
+    # The historical walk passes `domains` and runs its own retry on
+    # whole-month coverage; falling back here too would ask twice.
+    domains_asked = []
+
+    def fetch_fn(request, **_):
+        domains_asked.append(request.domain)
+        if request.dataset.name == "load":
+            raise EntsoeNoDataError("no matching data found")
+        return XML_BY_DATASET[request.dataset.name]
+
+    result = run_ingestion(
+        date(2024, 1, 1), date(2024, 1, 1),
+        token="tok",
+        spark=MagicMock(),
+        countries=[IRELAND],
+        domains={"IE": IE_DOMAIN},
+        datasets=DATASETS,
+        fetch_fn=fetch_fn,
+        spark_writer=MagicMock(return_value=4),
+    )
+
+    assert result.unavailable == ["IE:load"]
+    assert set(domains_asked) == {IE_DOMAIN.domain}
+
+
+def test_a_country_with_no_alternative_domain_is_not_retried():
+    assert "FR" not in ALTERNATIVE_DOMAINS
+    france = CountryConfig("FR", "France", "Paris", 48.8566, 2.3522, "Europe/Paris")
+    domains_asked = []
+
+    def fetch_fn(request, **_):
+        domains_asked.append(request.domain)
+        raise EntsoeNoDataError("no matching data found")
+
+    result = run_ingestion(
+        date(2024, 1, 1), date(2024, 1, 1),
+        token="tok",
+        spark=MagicMock(),
+        countries=[france],
+        datasets=DATASETS,
+        fetch_fn=fetch_fn,
+        spark_writer=MagicMock(return_value=0),
+    )
+
+    assert sorted(result.unavailable) == ["FR:generation", "FR:load", "FR:price"]
+    assert len(set(domains_asked)) == 1

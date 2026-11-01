@@ -169,6 +169,18 @@ A gap between Periods must remain identifiable.
 
 Do not manufacture observations for missing intervals.
 
+## Alternative Domains
+
+A country's configured domain is the one `src/config/entsoe_domains.yaml` holds. ENTSO-E answers a request under a code that holds nothing with a clean "no matching data" acknowledgement rather than an error, so the pair is classified `unavailable` and nothing is raised. That reading is right when the source has no data and wrong when the question was addressed to the wrong code.
+
+A country may publish different datasets under different codes at the same time. Ireland does: load only under the EirGrid control area `10YIE-1001A00010`, day-ahead price only under the SEM bidding zone `10Y1001A1001A59C`, generation under both. The daily run therefore recorded no Irish load at all for twelve months while the data was there the whole time, and reported success every night because no-data is not a failure.
+
+Any `(country, dataset)` pair classified `unavailable` must therefore be re-requested under the country's alternative domain, where one is known (`src/config/entsoe.ALTERNATIVE_DOMAINS`). A pair recovered that way is recorded as success. A pair empty under both codes stays `unavailable`, which is then a real answer about the source rather than an artefact of the question.
+
+Only `unavailable` pairs are retried. A `failed` pair means a timeout or an HTTP error, which says nothing about the domain being wrong, and is already handled by the retry and circuit-breaker machinery.
+
+The same map serves the historical walk, which applies it on whole-month coverage instead — see `specs/010-historical-blob-backfill.md`. Where a caller supplies domains explicitly it is steering the request itself, and no fallback is applied.
+
 ## Partial-Day Detection
 
 A successful HTTP/XML response does not guarantee a complete day of data.

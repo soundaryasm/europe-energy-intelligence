@@ -31,7 +31,12 @@ from datetime import date
 from typing import Callable, Dict, List, Optional, Sequence
 
 from src.config.countries import CountryConfig, load_countries
-from src.config.entsoe import EntsoeCountryDomain, EntsoeConfigError, load_entsoe_domains
+from src.config.entsoe import (
+    ALTERNATIVE_DOMAINS,
+    EntsoeCountryDomain,
+    EntsoeConfigError,
+    load_entsoe_domains,
+)
 from src.ingestion.entsoe_bronze import build_bronze_records
 from src.ingestion.entsoe_client import (
     DEFAULT_CHUNK_DAYS,
@@ -311,6 +316,88 @@ def _process_country(
     return result
 
 
+def _retry_unavailable_on_alternative_domains(
+    result,
+    country_domains: Sequence[EntsoeCountryDomain],
+    datasets: Sequence[EntsoeDataset],
+    windows: Sequence,
+    *,
+    alternatives: Dict[str, str],
+    token: str,
+    timeout: float,
+    max_retries: int,
+    fetch_fn: Callable[..., str],
+    start_date: date,
+    end_date: date,
+) -> List[dict]:
+    """Re-ask for the pairs the configured domain reported no data for.
+
+    ENTSO-E answers a request under a code that holds nothing with a
+    clean "no matching data" acknowledgement, so the pair is classified
+    `unavailable` and nothing is raised. That is the right reading when
+    the source genuinely has no data and the wrong one when the question
+    was addressed to the wrong code. Ireland is the case in hand: its
+    load is published only under the EirGrid control area, so the daily
+    run recorded no Irish load for a year while the data was there all
+    along.
+
+    Only `unavailable` pairs are retried, never `failed` ones — a
+    timeout or an HTTP error says nothing about the domain being wrong,
+    and re-asking elsewhere would spend requests on a problem the
+    retry/breaker machinery already handles.
+
+    A pair recovered this way stops being unavailable: the data exists,
+    and leaving a confirmed absence recorded that is not true is worse
+    than the extra request. A pair empty under both codes stays
+    unavailable, which is then a real answer about the source.
+
+    The retry gets its own circuit breaker. The main one may already be
+    open from unrelated country failures, and that must not decide
+    whether a different question gets asked at all.
+    """
+    by_code = {cd.country_code: cd for cd in country_domains}
+    pending: Dict[str, List[str]] = {}
+    for key in result.unavailable:
+        code, _, dataset_name = key.partition(":")
+        if code in alternatives and code in by_code:
+            pending.setdefault(code, []).append(dataset_name)
+
+    if not pending:
+        return []
+
+    recovered_records: List[dict] = []
+    breaker = CircuitBreaker(distinct_failure_threshold=len(pending) + 1)
+
+    for code, dataset_names in pending.items():
+        retry_datasets = [d for d in datasets if d.name in dataset_names]
+        if not retry_datasets:
+            continue
+        alternative = EntsoeCountryDomain(
+            country_code=code, domain=alternatives[code], validated=True,
+        )
+        logger.info(
+            "%s: %s reported no data under %s; retrying under %s",
+            code, dataset_names, by_code[code].domain, alternative.domain,
+        )
+        country_result = _process_country(
+            alternative, retry_datasets, windows,
+            token=token, timeout=timeout, max_retries=max_retries,
+            breaker=breaker, fetch_fn=fetch_fn,
+            start_date=start_date, end_date=end_date,
+        )
+        recovered = set(country_result.succeeded)
+        if not recovered:
+            continue
+        result.unavailable = [k for k in result.unavailable if k not in recovered]
+        result.succeeded.extend(country_result.succeeded)
+        result.errors.update(
+            {k: v for k, v in country_result.errors.items() if k not in recovered}
+        )
+        recovered_records.extend(country_result.records)
+
+    return recovered_records
+
+
 def run_ingestion(
     start_date: date,
     end_date: date,
@@ -328,6 +415,7 @@ def run_ingestion(
     chunk_days: int = DEFAULT_CHUNK_DAYS,
     max_workers: int = DEFAULT_MAX_WORKERS,
     circuit_breaker_threshold: int = DEFAULT_CIRCUIT_BREAKER_THRESHOLD,
+    alternative_domains: Optional[Dict[str, str]] = None,
 ) -> IngestionResult:
     """Ingest ENTSO-E Bronze data for every configured country and dataset.
 
@@ -389,6 +477,22 @@ def run_ingestion(
             result.failed.extend(country_result.failed)
             result.errors.update(country_result.errors)
             all_records.extend(country_result.records)
+
+    # Only when the domains were not chosen by the caller. An explicit
+    # `domains` means "ask under exactly this", which is how the
+    # historical walk performs its own retry — falling back again here
+    # would ask the same question twice.
+    if alternative_domains is None and domains is None:
+        alternative_domains = ALTERNATIVE_DOMAINS
+    if alternative_domains:
+        all_records.extend(
+            _retry_unavailable_on_alternative_domains(
+                result, country_domains, datasets, windows,
+                alternatives=alternative_domains,
+                token=token, timeout=timeout, max_retries=max_retries,
+                fetch_fn=fetch_fn, start_date=start_date, end_date=end_date,
+            )
+        )
 
     if all_records:
         result.records_written = spark_writer(spark, all_records, table_name)

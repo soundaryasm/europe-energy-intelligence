@@ -85,25 +85,11 @@ OPEN_METEO_DATASET = "weather"
 # the new), so no instant is served by both and a union of the two
 # cannot collide.
 #
-# Deliberately not effective-dated. Trying the former domain only when
-# the current one came back empty needs no switchover date in the code,
-# so there is nothing here to fall out of step with what ENTSO-E
-# actually serves, and nothing to get wrong for a month that straddles a
-# boundary. The daily pipeline never requests dates this old and is
-# unaffected — it keeps using the configured domain and this module is
-# the only place that knows about former zones.
-FORMER_DOMAINS = {
-    "DE": "10Y1001A1001A63L",  # DE-AT-LU, until the split on 2018-10-01
-    # Ireland publishes per dataset under two codes, not one before and
-    # one after a switchover: load lives only under the EirGrid control
-    # area below, while day-ahead price lives only under the SEM bidding
-    # zone in `entsoe_domains.yaml` (EirGrid answers ENERGY_PRICES with
-    # "no matching data"). Generation answers under both. Verified
-    # against live ENTSO-E on 2026-11-01 across every month the backfill
-    # had failed, 2016-04 through 2026-10. The retry unions the two
-    # responses, so each dataset is taken from whichever code holds it.
-    "IE": "10YIE-1001A00010",  # EirGrid control area; holds IE load
-}
+# Where to ask when the configured domain comes back short. Defined in
+# the domain config, not here, because the daily pipeline needs the same
+# map — Ireland's load is missing from the current code today, not only
+# in history.
+from src.config.entsoe import ALTERNATIVE_DOMAINS as FORMER_DOMAINS
 
 ONE_DAY = timedelta(days=1)
 

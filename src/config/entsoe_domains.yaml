@@ -19,8 +19,8 @@
 # repeated real Bronze ingestion" claim above was therefore never true
 # for IE load — that combination had zero rows and the gap was read as
 # an upstream absence for a year. Ireland is reached through
-# `src/blob/runner.FORMER_DOMAINS` like Germany, which despite the name
-# covers a concurrent per-dataset split as well as a historical change.
+# `src/config/entsoe.ALTERNATIVE_DOMAINS`, consulted by both the daily
+# pipeline and the historical walk when the code below returns nothing.
 #
 # ZONE CHANGES: every domain below is the one its country uses now.
 # Where a country has changed bidding zone, the domain here holds
@@ -33,9 +33,9 @@
 # ENTSO-E on 2026-10-31, including the handover falling mid-day on
 # 2018-09-30.
 #
-# This schema is deliberately not effective-dated. Former domains are
-# handled by `src/blob/runner.FORMER_DOMAINS`, which retries a country
-# under its former domain only when the configured one came back empty
+# This schema is deliberately not effective-dated. Second codes live in
+# `src/config/entsoe.ALTERNATIVE_DOMAINS`, tried only when a request
+# under the code here came back with nothing
 # — so no switchover date is encoded anywhere, and nothing here can
 # fall out of step with what ENTSO-E serves. Only historical ingestion
 # needs this; the daily pipeline never requests dates that old.
