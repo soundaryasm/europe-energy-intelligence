@@ -2,8 +2,9 @@
 
 Domain (EIC) codes live in `entsoe_domains.yaml`, separate from country
 metadata in `countries.yaml`, so ingestion code never hard-codes them.
-Every entry currently carries `validated: false` — see that file's header
-for why, and treat it as an open blocker before production use.
+Every entry is `validated: true`, confirmed against live ENTSO-E — see
+that file's header. `ALTERNATIVE_DOMAINS` below holds the second code to
+ask under when the configured one returns nothing.
 """
 from __future__ import annotations
 

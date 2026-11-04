@@ -10,8 +10,9 @@
 # returned real data; see project memory for the full coverage matrix).
 #
 # Spec 002: "Codes must be validated against ENTSO-E before being
-# committed to production configuration." `validated: false` is an open
-# blocker, not a soft warning — there are none left below.
+# committed to production configuration." Every entry below is
+# `validated: true`; a `validated: false` entry would be an open
+# blocker, not a soft warning.
 #
 # IRELAND: the SEM code below serves price and generation but NOT load.
 # Irish load is published only under the EirGrid control area

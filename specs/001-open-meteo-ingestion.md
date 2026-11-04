@@ -89,6 +89,10 @@ This is not just a scheduling preference: the Historical/Archive API's ERA5-rean
 
 **Consequence that must be documented wherever Gold/dashboard data is described:** a recent date's weather metric can show a small delta if viewed again a few days later, once a later pipeline run has re-fetched and replaced the earlier value via the existing idempotent Bronze MERGE. This is expected, not a data-quality defect.
 
+**The lookback must stay inside the Forecast API's usable history.** Measured against live Open-Meteo on 2026-11-04 from a reference location: the Forecast API served real values back 52 days, and for dates before that returned rows whose values were `null` — an HTTP 200 with the dates present, not an error. It only rejects a request outright at roughly 100 days back (`start_date is out of allowed range`).
+
+Those nulls would reach Bronze. `open_meteo_bronze.build_bronze_records` emits one row per date for each requested variable without a null check, which is correct — manufacturing a value would be worse — but it means a `lookback_days` set beyond the Forecast window silently writes null-valued weather rows rather than failing. A lookback of a few days is safe; one of several weeks is not. Settled dates further back belong to the Archive API, via an explicit reprocess.
+
 The implementation must also support explicitly reprocessing previous dates.
 
 Reruns must not create duplicate logical records.

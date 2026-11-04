@@ -13,13 +13,13 @@
 # MAGIC This notebook must be executed on Databricks — it relies on `dbutils`
 # MAGIC and `spark`, which only exist in a Databricks notebook runtime.
 # MAGIC
-# MAGIC **Known blocker:** most ENTSO-E domain codes in
-# MAGIC `src/config/entsoe_domains.yaml` are still marked `validated: false` —
-# MAGIC they were sourced from public documentation, not confirmed against a
-# MAGIC live ENTSO-E account. NL is now `validated: true`, confirmed against a
-# MAGIC real tested request/response — see `tmp/entsoe.md`. Confirm
-# MAGIC the remaining domains (and obtain a security token) before relying on
-# MAGIC this notebook's output for IE/DE/FR/ES.
+# MAGIC Every domain in `src/config/entsoe_domains.yaml` is now
+# MAGIC `validated: true`, confirmed against live ENTSO-E. Ireland is the
+# MAGIC exception worth knowing about: its load is published only under
+# MAGIC the EirGrid control area, not the SEM bidding zone in that file,
+# MAGIC so a dataset that comes back with no data is re-requested under
+# MAGIC `src/config/entsoe.ALTERNATIVE_DOMAINS` — see Spec 002
+# MAGIC "Alternative Domains".
 
 # COMMAND ----------
 

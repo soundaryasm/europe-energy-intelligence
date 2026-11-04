@@ -32,7 +32,7 @@ resources:
       schedule:
         quartz_cron_expression: "0 0 2 * * ?"
         timezone_id: "UTC"
-        pause_status: PAUSED
+        pause_status: UNPAUSED
 
       # A scheduled run always uses execution_mode=daily (Spec 006:
       # "The scheduled daily workflow must not accidentally trigger a

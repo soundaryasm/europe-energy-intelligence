@@ -7,9 +7,12 @@
 # MAGIC into PostgreSQL via `src/serving/postgres_publisher.py`.
 # MAGIC
 # MAGIC This notebook must be executed on Databricks — it relies on `spark`
-# MAGIC and `dbutils`, which only exist in a Databricks notebook runtime, and
-# MAGIC it has never been run here: no Databricks Gold tables or PostgreSQL
-# MAGIC credentials are available in this environment.
+# MAGIC and `dbutils`, which only exist in a Databricks notebook runtime.
+# MAGIC
+# MAGIC The Gold tables are filtered to the canonical processing window
+# MAGIC (Spec 006) before being collected, so a daily run publishes a few
+# MAGIC days rather than the whole history — see Spec 005 "Daily
+# MAGIC Incremental Load".
 
 # COMMAND ----------
 
