@@ -78,3 +78,56 @@ def test_the_rebuild_job_defaults_to_reprocess_from_the_start_of_history():
     # run that forgets to pass one fails loudly instead of silently
     # rebuilding a stale range.
     assert params["end_date"] == ""
+
+
+# --- Unattended-run resilience -----------------------------------------
+#
+# The daily job runs at 02:00 with nobody watching. A task that fails
+# without retrying takes every downstream task with it, so the night is
+# lost and the gap has to be noticed and repaired by hand.
+
+# Exceeding ENTSO-E's per-token rate limit earns a 10-minute ban (see
+# .github/workflows/historical-backfill.yml), so a retry scheduled
+# inside that window arrives banned and burns an attempt for nothing.
+ENTSOE_BAN_SECONDS = 10 * 60
+
+
+def _daily_tasks():
+    return {t["task_key"]: t for t in
+            _job("daily_pipeline.yml", "europe_energy_intelligence_daily")["tasks"]}
+
+
+@pytest.mark.parametrize("task_key", [
+    "ingest_entsoe", "ingest_open_meteo", "ingest_worldbank",
+    "transform_silver", "build_dbt_gold", "publish_postgres",
+])
+def test_every_daily_task_retries(task_key):
+    task = _daily_tasks()[task_key]
+    assert task.get("max_retries", 0) >= 1, (
+        f"{task_key} would fail the whole night on one transient fault"
+    )
+
+
+def test_the_ingest_tasks_all_retry_the_same_number_of_times():
+    # No source gets a weaker retry budget than another. All three
+    # re-fetch their whole window every night, so a failed night
+    # self-heals identically for each.
+    attempts = {
+        k: _daily_tasks()[k]["max_retries"]
+        for k in ("ingest_entsoe", "ingest_open_meteo", "ingest_worldbank")
+    }
+    assert len(set(attempts.values())) == 1, attempts
+
+
+def test_entsoe_retries_wait_out_the_rate_limit_ban():
+    task = _daily_tasks()["ingest_entsoe"]
+    gap_seconds = task["min_retry_interval_millis"] / 1000
+    assert gap_seconds > ENTSOE_BAN_SECONDS
+
+
+def test_the_api_backed_tasks_retry_on_timeout():
+    # Read timeouts were the observed ENTSO-E failure mode on
+    # 2026-11-04, and a timeout is not retried unless this is set.
+    tasks = _daily_tasks()
+    for task_key in ("ingest_entsoe", "ingest_open_meteo"):
+        assert tasks[task_key].get("retry_on_timeout") is True, task_key

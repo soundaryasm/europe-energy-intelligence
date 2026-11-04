@@ -90,11 +90,34 @@ resources:
               # See the notebook's own sys.path bootstrap comment for why.
               bundle_root: "${workspace.file_path}"
           timeout_seconds: 3600
-          # No task-level retry: the in-process circuit breaker
-          # (src/orchestration/circuit_breaker.py) already bounds retry
-          # cost per-run, and a task-level retry 5 minutes later almost
-          # never outlives the same outage — it only repeats the same
-          # probe.
+          # Same reasoning as ingest_entsoe, with a shorter interval:
+          # Open-Meteo publishes no rate-limit ban window, so there is
+          # nothing to wait out beyond a transient fault.
+          max_retries: 1
+          min_retry_interval_millis: 300000
+          retry_on_timeout: true
+          # This task-level retry replaces an earlier decision not to
+          # have one, whose reasoning was that the in-process circuit
+          # breaker already bounds retry cost and that a retry minutes
+          # later "almost never outlives the same outage". Observation
+          # on 2026-11-04 contradicted that: ENTSO-E returned non-XML
+          # bodies and read timeouts across five countries, the breaker
+          # opened, the task failed — and the very next attempt
+          # succeeded in full. The breaker bounds cost within a run; it
+          # cannot make a run happen again.
+          #
+          # One retry, not more, because the rolling `lookback_days`
+          # window is the second safety net: a night lost entirely is
+          # re-fetched by the next run at no extra cost, since Silver
+          # and Gold rebuild the same amount either way. A failed night
+          # is in fact cheaper than a successful one — nothing
+          # downstream of the ingest runs. Only a source failing on
+          # more nights in a row than the lookback is wide would lose
+          # data, which is both unlikely and visible.
+          #
+          # The interval is a clock, not compute: nothing runs while it
+          # waits, so its length is free. The retry attempt is what
+          # costs, which is why there is one.
 
         - task_key: ingest_entsoe
           environment_key: python_notebook_env
@@ -109,18 +132,41 @@ resources:
               secret_key: "ENTSOE_API_TOKEN"
               bundle_root: "${workspace.file_path}"
           timeout_seconds: 3600
-          # No task-level retry — see ingest_open_meteo's comment above;
-          # same reasoning applies here.
+          # ENTSO-E is intermittently unreliable: observed on 2026-11-04
+          # returning non-XML bodies and read timeouts across five
+          # countries at once, which tripped the circuit breaker and
+          # failed the task. A second attempt minutes later succeeded.
+          # Without retries that is a lost night at 02:00, and every
+          # downstream task is skipped with it.
+          #
+          # The interval clears the 10-minute ban that follows exceeding
+          # the per-token rate limit (see historical-backfill.yml), since
+          # a retry inside that window would be banned on arrival and
+          # burn an attempt for nothing.
+          max_retries: 1
+          min_retry_interval_millis: 900000
+          retry_on_timeout: true
 
-        # World Bank is intentionally independent of everything else in
-        # this DAG: no date-range parameters (it always fetches whatever
-        # year is currently current — see worldbank_ingestion.py), no
-        # secret (no API key required), and no downstream dependents —
-        # Silver/Gold/Postgres do not consume it yet. It runs in
-        # parallel with the other two ingestion tasks purely to land in
-        # Bronze daily; a failure here must not block ENTSO-E/Open-Meteo
-        # reaching Silver/Gold/Postgres, so nothing downstream depends
-        # on it.
+        # World Bank takes no date-range parameters (it always fetches
+        # whatever year is current — see worldbank_ingestion.py) and no
+        # secret (no API key required), and it runs in parallel with the
+        # other two ingestion tasks.
+        #
+        # Nothing downstream depends on it, deliberately. Silver *does*
+        # consume it now — `silver_worldbank_annual`, surfacing as the
+        # population/GDP columns on `fact_energy_daily` — but it reads
+        # the table defensively and skips it when absent, so a World
+        # Bank failure costs stale annual enrichment rather than a lost
+        # night of energy data. Blocking ENTSO-E and Open-Meteo from
+        # reaching Silver over a population figure would be the worse
+        # trade.
+        #
+        # The cost of no dependency is that Silver may read the World
+        # Bank table before this task has finished writing it, and so
+        # use yesterday's snapshot. Delta's isolation makes that a
+        # consistent older read rather than a torn one, and the values
+        # are annual — a day's staleness in a population count is not
+        # measurable.
         - task_key: ingest_worldbank
           environment_key: python_notebook_env
           notebook_task:
@@ -128,8 +174,19 @@ resources:
             base_parameters:
               bundle_root: "${workspace.file_path}"
           timeout_seconds: 1800
-          # No task-level retry — see ingest_open_meteo's comment above;
-          # same reasoning applies here.
+          # Same retry treatment as the other ingest tasks. The data is
+          # annual rather than daily, but that is not a reason to try
+          # less hard: this fetches the whole current year every night,
+          # so a failed night self-heals exactly the way ENTSO-E's
+          # rolling lookback does.
+          #
+          # What does differ is that `transform_silver` does not depend
+          # on this task and tolerates its table not existing, so a
+          # World Bank failure costs stale population/GDP enrichment
+          # rather than a lost night of energy data.
+          max_retries: 1
+          min_retry_interval_millis: 300000
+          retry_on_timeout: true
 
         # Silver must not start until BOTH ingestion tasks succeed
         # (implicit ALL_SUCCESS run_if — Spec 006 "Failure Behaviour").
@@ -191,6 +248,12 @@ resources:
               end_date: "{{job.parameters.end_date}}"
               lookback_days: "{{job.parameters.lookback_days}}"
           timeout_seconds: 1800
+          # Two here, unlike the ingest tasks: this is the last task, so
+          # a retry re-does only the publish — Bronze, Silver and Gold
+          # are already committed — and Neon's compute scales to zero
+          # after five minutes idle, so the first connection of the
+          # night can cold-start. That is a transient worth a second
+          # look at.
           max_retries: 2
           min_retry_interval_millis: 300000
           retry_on_timeout: true
