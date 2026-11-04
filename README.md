@@ -85,6 +85,7 @@ notebooks/      Databricks task entry points
 dbt/models/     Gold models
 resources/      Databricks Asset Bundle job definitions
 migrations/     one-time Bronze schema migrations
+archive/        records of completed one-off work
 specs/          numbered specifications
 scripts/        operational scripts
 tests/          pytest suite
