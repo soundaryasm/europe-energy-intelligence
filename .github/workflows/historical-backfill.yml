@@ -35,6 +35,7 @@ permissions:
 
 jobs:
   resolve-year:
+    if: false  # Disabled: the backfill walk is complete (2026-11-04).
     runs-on: ubuntu-latest
     # Above the worst-case year, below the 6-hour default: a hung run
     # should die rather than consume the monthly minute allowance.
