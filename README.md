@@ -14,10 +14,6 @@ World Bank  ─┘   (Delta)   (Delta)    (Delta)
 Databricks is the system of record and runs every transformation. PostgreSQL
 is a serving layer holding curated Gold tables only.
 
-Historical ingestion runs on GitHub Actions and writes one Parquet file per
-source-month to S3-compatible blob storage; Databricks stages those files to a
-Unity Catalog volume and merges them into Bronze.
-
 ## Data
 
 | Layer | Grain | Rows |
@@ -28,8 +24,45 @@ Unity Catalog volume and merges them into Bronze.
 
 Countries: IE, DE, FR, ES, NL, BE, PT, PL, CZ, FI, HU, RO, SK, SI, EE
 
-Serving tables: `dim_country`, `dim_date`, `fact_energy_daily`,
-`fact_weather_daily`, `fact_generation_mix_daily`
+## Serving layer
+
+PostgreSQL holds the curated Gold tables and nothing else:
+
+`dim_country`, `dim_date`, `fact_energy_daily`, `fact_weather_daily`,
+`fact_generation_mix_daily`
+
+It is a plain star schema in standard SQL — no vendor extensions, no stored
+procedures, no API in front of it. Any client that speaks PostgreSQL can read
+it directly: Power BI, Tableau, Metabase, Grafana, a web app, a notebook,
+`psql`. All aggregation has already happened upstream, so a dashboard query is
+a fact table joined to two dimensions.
+
+Power BI is the reference consumer. It is not a dependency.
+
+Full history is published, not a recent slice: around 453K rows and under
+100 MB, growing roughly 12 MB a year.
+
+## Historical backfill
+
+Coverage starts at **January 2015**, when the ENTSO-E Transparency Platform
+went live (5 January 2015, under EU Regulation 543/2013). No earlier data
+exists at the source. January 2015 is therefore partial by nature — the
+platform began publishing mid-month.
+
+Backfill runs on GitHub Actions, one year per invocation, and writes one
+Parquet file per source-month to S3-compatible blob storage. Databricks then
+stages those files to a Unity Catalog volume and merges them into Bronze.
+
+Blob storage sits in the middle for three reasons:
+
+- backfill is HTTP requests, Parquet serialisation and an object-store write —
+  no Spark, so it does not need to consume the Databricks compute allowance
+- a year can be re-fetched, inspected or repaired without touching Bronze
+- the merge into Bronze becomes a single idempotent pass over local files
+  rather than thousands of API calls
+
+A per-month manifest records every source/country/dataset outcome, so a
+failed combination is retried without re-fetching what already succeeded.
 
 ## Jobs
 
