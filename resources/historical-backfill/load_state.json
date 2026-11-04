@@ -1,0 +1,507 @@
+{
+  "entsoe:2015": {
+    "files": {
+      "01.parquet": 1261362,
+      "02.parquet": 1235919,
+      "03.parquet": 1309983,
+      "04.parquet": 1272426,
+      "05.parquet": 1308137,
+      "06.parquet": 1232699,
+      "07.parquet": 1284083,
+      "08.parquet": 1283151,
+      "09.parquet": 1258951,
+      "10.parquet": 1320507,
+      "11.parquet": 1299875,
+      "12.parquet": 1307650
+    },
+    "loaded_at": "2026-11-04T13:48:16.387860+00:00",
+    "rows": 2512934
+  },
+  "entsoe:2016": {
+    "files": {
+      "01.parquet": 1293098,
+      "02.parquet": 1220863,
+      "03.parquet": 1328640,
+      "04.parquet": 1279954,
+      "05.parquet": 1308697,
+      "06.parquet": 1277234,
+      "07.parquet": 1286256,
+      "08.parquet": 1275155,
+      "09.parquet": 1253661,
+      "10.parquet": 1318528,
+      "11.parquet": 1308145,
+      "12.parquet": 1324916
+    },
+    "loaded_at": "2026-11-04T13:48:51.494975+00:00",
+    "rows": 2547151
+  },
+  "entsoe:2017": {
+    "files": {
+      "01.parquet": 1339901,
+      "02.parquet": 1237663,
+      "03.parquet": 1343486,
+      "04.parquet": 1268502,
+      "05.parquet": 1307363,
+      "06.parquet": 1283260,
+      "07.parquet": 1291285,
+      "08.parquet": 1300690,
+      "09.parquet": 1264363,
+      "10.parquet": 1313546,
+      "11.parquet": 1312190,
+      "12.parquet": 1330536
+    },
+    "loaded_at": "2026-11-04T13:49:22.144972+00:00",
+    "rows": 2541679
+  },
+  "entsoe:2018": {
+    "files": {
+      "01.parquet": 1320614,
+      "02.parquet": 1241073,
+      "03.parquet": 1312289,
+      "04.parquet": 1296328,
+      "05.parquet": 1303154,
+      "06.parquet": 1285207,
+      "07.parquet": 1297251,
+      "08.parquet": 1311654,
+      "09.parquet": 1326022,
+      "10.parquet": 1307377,
+      "11.parquet": 1302673,
+      "12.parquet": 1326890
+    },
+    "loaded_at": "2026-11-04T13:49:51.731093+00:00",
+    "rows": 2541167
+  },
+  "entsoe:2019": {
+    "files": {
+      "01.parquet": 1338150,
+      "02.parquet": 1257168,
+      "03.parquet": 1350396,
+      "04.parquet": 1304725,
+      "05.parquet": 1300132,
+      "06.parquet": 1299798,
+      "07.parquet": 1305153,
+      "08.parquet": 1309883,
+      "09.parquet": 1300788,
+      "10.parquet": 1373256,
+      "11.parquet": 1337773,
+      "12.parquet": 1390461
+    },
+    "loaded_at": "2026-11-04T13:50:21.030338+00:00",
+    "rows": 2602196
+  },
+  "entsoe:2020": {
+    "files": {
+      "01.parquet": 1368326,
+      "02.parquet": 1321673,
+      "03.parquet": 1364953,
+      "04.parquet": 1300443,
+      "05.parquet": 1368001,
+      "06.parquet": 1290974,
+      "07.parquet": 1329701,
+      "08.parquet": 1347687,
+      "09.parquet": 1321366,
+      "10.parquet": 1393807,
+      "11.parquet": 1342718,
+      "12.parquet": 1374317
+    },
+    "loaded_at": "2026-11-04T13:50:49.347471+00:00",
+    "rows": 2668615
+  },
+  "entsoe:2021": {
+    "files": {
+      "01.parquet": 1425396,
+      "02.parquet": 1355214,
+      "03.parquet": 1463383,
+      "04.parquet": 1415422,
+      "05.parquet": 1462089,
+      "06.parquet": 1371297,
+      "07.parquet": 1418092,
+      "08.parquet": 1432756,
+      "09.parquet": 1413893,
+      "10.parquet": 1478679,
+      "11.parquet": 1381500,
+      "12.parquet": 1507738
+    },
+    "loaded_at": "2026-11-04T13:51:23.460762+00:00",
+    "rows": 2811950
+  },
+  "entsoe:2022": {
+    "files": {
+      "01.parquet": 1437624,
+      "02.parquet": 1328868,
+      "03.parquet": 1449847,
+      "04.parquet": 1387322,
+      "05.parquet": 1422523,
+      "06.parquet": 1492378,
+      "07.parquet": 1483210,
+      "08.parquet": 1493853,
+      "09.parquet": 1481385,
+      "10.parquet": 1527382,
+      "11.parquet": 1479668,
+      "12.parquet": 1566384
+    },
+    "loaded_at": "2026-11-04T13:51:57.890945+00:00",
+    "rows": 2958525
+  },
+  "entsoe:2023": {
+    "files": {
+      "01.parquet": 1510222,
+      "02.parquet": 1430050,
+      "03.parquet": 1622672,
+      "04.parquet": 1505200,
+      "05.parquet": 1535592,
+      "06.parquet": 1565591,
+      "07.parquet": 1638732,
+      "08.parquet": 1658118,
+      "09.parquet": 1545804,
+      "10.parquet": 1639154,
+      "11.parquet": 1661902,
+      "12.parquet": 1664347
+    },
+    "loaded_at": "2026-11-04T13:52:33.791237+00:00",
+    "rows": 3231296
+  },
+  "entsoe:2024": {
+    "files": {
+      "01.parquet": 1670389,
+      "02.parquet": 1522833,
+      "03.parquet": 1728396,
+      "04.parquet": 1596091,
+      "05.parquet": 1663978,
+      "06.parquet": 1813791,
+      "07.parquet": 2086462,
+      "08.parquet": 2059993,
+      "09.parquet": 2027448,
+      "10.parquet": 2127522,
+      "11.parquet": 2070567,
+      "12.parquet": 2215980
+    },
+    "loaded_at": "2026-11-04T13:53:12.059133+00:00",
+    "rows": 3653605
+  },
+  "entsoe:2025": {
+    "files": {
+      "01.parquet": 2349414,
+      "02.parquet": 2253629,
+      "03.parquet": 2502517,
+      "04.parquet": 2290088,
+      "05.parquet": 2396494,
+      "06.parquet": 2319876,
+      "07.parquet": 2431913,
+      "08.parquet": 2526912,
+      "09.parquet": 2528407,
+      "10.parquet": 2770929,
+      "11.parquet": 2796611,
+      "12.parquet": 2903162
+    },
+    "loaded_at": "2026-11-04T13:53:51.375332+00:00",
+    "rows": 4488364
+  },
+  "entsoe:2026": {
+    "files": {
+      "01.parquet": 2968250,
+      "02.parquet": 2717987,
+      "03.parquet": 2957464,
+      "04.parquet": 2841538,
+      "05.parquet": 3116515,
+      "06.parquet": 3095637,
+      "07.parquet": 3240661,
+      "08.parquet": 3169302,
+      "09.parquet": 3102307,
+      "10.parquet": 2995993
+    },
+    "loaded_at": "2026-11-04T13:54:29.158962+00:00",
+    "rows": 4303415
+  },
+  "open_meteo:2015": {
+    "files": {
+      "01.parquet": 11950,
+      "02.parquet": 11595,
+      "03.parquet": 12034,
+      "04.parquet": 11683,
+      "05.parquet": 11937,
+      "06.parquet": 11773,
+      "07.parquet": 12052,
+      "08.parquet": 12040,
+      "09.parquet": 11586,
+      "10.parquet": 11715,
+      "11.parquet": 11637,
+      "12.parquet": 11757
+    },
+    "loaded_at": "2026-11-04T13:48:24.713800+00:00",
+    "rows": 16425
+  },
+  "open_meteo:2016": {
+    "files": {
+      "01.parquet": 12035,
+      "02.parquet": 11805,
+      "03.parquet": 11997,
+      "04.parquet": 11676,
+      "05.parquet": 11825,
+      "06.parquet": 11826,
+      "07.parquet": 12092,
+      "08.parquet": 11987,
+      "09.parquet": 11763,
+      "10.parquet": 11720,
+      "11.parquet": 11671,
+      "12.parquet": 11813
+    },
+    "loaded_at": "2026-11-04T13:48:58.613371+00:00",
+    "rows": 16470
+  },
+  "open_meteo:2017": {
+    "files": {
+      "01.parquet": 12080,
+      "02.parquet": 11647,
+      "03.parquet": 12049,
+      "04.parquet": 11803,
+      "05.parquet": 11928,
+      "06.parquet": 11871,
+      "07.parquet": 12002,
+      "08.parquet": 12121,
+      "09.parquet": 11712,
+      "10.parquet": 11926,
+      "11.parquet": 11528,
+      "12.parquet": 11815
+    },
+    "loaded_at": "2026-11-04T13:49:29.047433+00:00",
+    "rows": 16425
+  },
+  "open_meteo:2018": {
+    "files": {
+      "01.parquet": 11872,
+      "02.parquet": 11601,
+      "03.parquet": 12180,
+      "04.parquet": 11684,
+      "05.parquet": 11766,
+      "06.parquet": 11775,
+      "07.parquet": 11920,
+      "08.parquet": 12098,
+      "09.parquet": 11725,
+      "10.parquet": 11818,
+      "11.parquet": 11537,
+      "12.parquet": 11829
+    },
+    "loaded_at": "2026-11-04T13:49:58.110439+00:00",
+    "rows": 16425
+  },
+  "open_meteo:2019": {
+    "files": {
+      "01.parquet": 11916,
+      "02.parquet": 11641,
+      "03.parquet": 12125,
+      "04.parquet": 11690,
+      "05.parquet": 11941,
+      "06.parquet": 11753,
+      "07.parquet": 11979,
+      "08.parquet": 11950,
+      "09.parquet": 11660,
+      "10.parquet": 11744,
+      "11.parquet": 11579,
+      "12.parquet": 11731
+    },
+    "loaded_at": "2026-11-04T13:50:27.045885+00:00",
+    "rows": 16425
+  },
+  "open_meteo:2020": {
+    "files": {
+      "01.parquet": 11916,
+      "02.parquet": 11896,
+      "03.parquet": 12155,
+      "04.parquet": 11682,
+      "05.parquet": 11928,
+      "06.parquet": 11815,
+      "07.parquet": 12063,
+      "08.parquet": 12081,
+      "09.parquet": 11719,
+      "10.parquet": 11721,
+      "11.parquet": 11535,
+      "12.parquet": 11642
+    },
+    "loaded_at": "2026-11-04T13:50:56.496947+00:00",
+    "rows": 16470
+  },
+  "open_meteo:2021": {
+    "files": {
+      "01.parquet": 11900,
+      "02.parquet": 11680,
+      "03.parquet": 12052,
+      "04.parquet": 11715,
+      "05.parquet": 11967,
+      "06.parquet": 11752,
+      "07.parquet": 11998,
+      "08.parquet": 12142,
+      "09.parquet": 11608,
+      "10.parquet": 11812,
+      "11.parquet": 11505,
+      "12.parquet": 11809
+    },
+    "loaded_at": "2026-11-04T13:51:31.183357+00:00",
+    "rows": 16425
+  },
+  "open_meteo:2022": {
+    "files": {
+      "01.parquet": 12025,
+      "02.parquet": 11736,
+      "03.parquet": 11966,
+      "04.parquet": 11834,
+      "05.parquet": 11901,
+      "06.parquet": 11723,
+      "07.parquet": 12034,
+      "08.parquet": 11974,
+      "09.parquet": 11569,
+      "10.parquet": 11795,
+      "11.parquet": 11557,
+      "12.parquet": 11798
+    },
+    "loaded_at": "2026-11-04T13:52:05.371524+00:00",
+    "rows": 16425
+  },
+  "open_meteo:2023": {
+    "files": {
+      "01.parquet": 11902,
+      "02.parquet": 11603,
+      "03.parquet": 12148,
+      "04.parquet": 11794,
+      "05.parquet": 11898,
+      "06.parquet": 11715,
+      "07.parquet": 11959,
+      "08.parquet": 12040,
+      "09.parquet": 11592,
+      "10.parquet": 11958,
+      "11.parquet": 11783,
+      "12.parquet": 11973
+    },
+    "loaded_at": "2026-11-04T13:52:41.583905+00:00",
+    "rows": 16425
+  },
+  "open_meteo:2024": {
+    "files": {
+      "01.parquet": 12167,
+      "02.parquet": 11786,
+      "03.parquet": 12011,
+      "04.parquet": 11890,
+      "05.parquet": 11821,
+      "06.parquet": 11816,
+      "07.parquet": 12069,
+      "08.parquet": 12059,
+      "09.parquet": 11718,
+      "10.parquet": 11675,
+      "11.parquet": 11514,
+      "12.parquet": 11655
+    },
+    "loaded_at": "2026-11-04T13:53:19.564635+00:00",
+    "rows": 16470
+  },
+  "open_meteo:2025": {
+    "files": {
+      "01.parquet": 11810,
+      "02.parquet": 11468,
+      "03.parquet": 11773,
+      "04.parquet": 11676,
+      "05.parquet": 11855,
+      "06.parquet": 11823,
+      "07.parquet": 12091,
+      "08.parquet": 12057,
+      "09.parquet": 11685,
+      "10.parquet": 11731,
+      "11.parquet": 11505,
+      "12.parquet": 11637
+    },
+    "loaded_at": "2026-11-04T13:53:58.925321+00:00",
+    "rows": 16425
+  },
+  "open_meteo:2026": {
+    "files": {
+      "01.parquet": 11930,
+      "02.parquet": 11578,
+      "03.parquet": 11788,
+      "04.parquet": 11635,
+      "05.parquet": 11930,
+      "06.parquet": 11897,
+      "07.parquet": 12045,
+      "08.parquet": 12068,
+      "09.parquet": 11816,
+      "10.parquet": 11780
+    },
+    "loaded_at": "2026-11-04T13:54:36.912872+00:00",
+    "rows": 13680
+  },
+  "worldbank:2015": {
+    "files": {
+      "year.parquet": 3573
+    },
+    "loaded_at": "2026-11-04T13:48:33.663151+00:00",
+    "rows": 60
+  },
+  "worldbank:2016": {
+    "files": {
+      "year.parquet": 3579
+    },
+    "loaded_at": "2026-11-04T13:49:05.626593+00:00",
+    "rows": 60
+  },
+  "worldbank:2017": {
+    "files": {
+      "year.parquet": 3570
+    },
+    "loaded_at": "2026-11-04T13:49:34.951423+00:00",
+    "rows": 60
+  },
+  "worldbank:2018": {
+    "files": {
+      "year.parquet": 3587
+    },
+    "loaded_at": "2026-11-04T13:50:05.172922+00:00",
+    "rows": 60
+  },
+  "worldbank:2019": {
+    "files": {
+      "year.parquet": 3569
+    },
+    "loaded_at": "2026-11-04T13:50:33.288348+00:00",
+    "rows": 60
+  },
+  "worldbank:2020": {
+    "files": {
+      "year.parquet": 3563
+    },
+    "loaded_at": "2026-11-04T13:51:02.539586+00:00",
+    "rows": 60
+  },
+  "worldbank:2021": {
+    "files": {
+      "year.parquet": 3588
+    },
+    "loaded_at": "2026-11-04T13:51:38.652668+00:00",
+    "rows": 60
+  },
+  "worldbank:2022": {
+    "files": {
+      "year.parquet": 3586
+    },
+    "loaded_at": "2026-11-04T13:52:12.574172+00:00",
+    "rows": 60
+  },
+  "worldbank:2023": {
+    "files": {
+      "year.parquet": 3591
+    },
+    "loaded_at": "2026-11-04T13:52:48.011377+00:00",
+    "rows": 60
+  },
+  "worldbank:2024": {
+    "files": {
+      "year.parquet": 3597
+    },
+    "loaded_at": "2026-11-04T13:53:26.038002+00:00",
+    "rows": 60
+  },
+  "worldbank:2025": {
+    "files": {
+      "year.parquet": 3591
+    },
+    "loaded_at": "2026-11-04T13:54:04.886194+00:00",
+    "rows": 60
+  }
+}
