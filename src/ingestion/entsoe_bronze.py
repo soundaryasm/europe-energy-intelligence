@@ -47,7 +47,7 @@ def build_bronze_records(
     and `tmp/entsoe.md`). A missing one is therefore treated as a genuine
     ingestion defect and rejected here, rather than silently persisted as
     a `NULL` that later collides with a real value under the same merge
-    key (see `docs/migrations/001_entsoe_bronze_add_business_type.sql` for
+    key (see `migrations/001_entsoe_bronze_add_business_type.sql` for
     the incident this guards against).
     """
     ts = ingestion_timestamp or datetime.now(dt_timezone.utc)

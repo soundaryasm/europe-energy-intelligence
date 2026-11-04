@@ -136,7 +136,7 @@ def _filter_points_within_window(parsed_points: List[dict], window_start: date, 
     local-calendar-day blocks: a request for a single UTC day can come
     back with data from an adjacent day too, once local-time day
     boundaries are accounted for (confirmed against a real response —
-    see docs/migrations/ commit history / this incident). `load` and
+    see migrations/ commit history / this incident). `load` and
     `generation` have not shown this, but the trim applies uniformly
     rather than special-casing one dataset, since "only persist what was
     actually requested" is a general invariant, not a price-specific one.
@@ -193,7 +193,7 @@ def _default_spark_writer(spark, records: List[dict], table_name: str) -> int:
     environment v5 — see `delta_schema` module docstring). A schema
     mismatch (e.g. a table predating the `business_type` column) fails
     loudly; bring the table up to date with an explicit migration first
-    (`docs/migrations/001_entsoe_bronze_add_business_type.sql`).
+    (`migrations/001_entsoe_bronze_add_business_type.sql`).
     """
     from src.ingestion.delta_schema import (
         ENTSOE_BRONZE_KEY_COLS,

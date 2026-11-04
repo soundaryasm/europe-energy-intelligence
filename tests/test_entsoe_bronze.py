@@ -106,7 +106,7 @@ def test_build_bronze_records_rejects_missing_business_type():
     # Real incident this guards against: an ALTER TABLE-added business_type
     # column defaults existing rows to NULL, and a NULL business_type Bronze
     # row silently duplicates instead of merging with a correctly-tagged one
-    # (see docs/migrations/001_entsoe_bronze_add_business_type.sql). Refusing
+    # (see migrations/001_entsoe_bronze_add_business_type.sql). Refusing
     # to build a row with no businessType at all stops a bad ingestion run
     # from reintroducing that ambiguity in the first place.
     parsed = parse_time_series(PRICE_XML_MISSING_BUSINESS_TYPE, PRICE)

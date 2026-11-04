@@ -84,6 +84,7 @@ src/            ingestion, transformations, serving, blob layer
 notebooks/      Databricks task entry points
 dbt/models/     Gold models
 resources/      Databricks Asset Bundle job definitions
+migrations/     one-time Bronze schema migrations
 specs/          numbered specifications
 scripts/        operational scripts
 tests/          pytest suite

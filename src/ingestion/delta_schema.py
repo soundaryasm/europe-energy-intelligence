@@ -16,7 +16,7 @@ on automatic schema evolution at all, on any environment:
   matches before merging; a mismatch fails loudly (`SchemaMismatchError`)
   instead of silently altering a production table.
 - Adding/removing a column (e.g. `business_type`) is a deliberate,
-  one-time migration applied out-of-band (see `docs/migrations/`), not
+  one-time migration applied out-of-band (see `migrations/`), not
   something a daily/reprocess run or the historical load does on the fly.
 """
 from __future__ import annotations
@@ -56,7 +56,7 @@ class SchemaMismatchError(Exception):
     """An existing Delta table's schema does not match this code's expected schema.
 
     Raised instead of silently evolving the table. Resolve by applying an
-    explicit migration (see `docs/migrations/`) that brings the table's
+    explicit migration (see `migrations/`) that brings the table's
     schema in line with the current `*_bronze_schema()` definition, then
     rerun.
     """
@@ -163,7 +163,7 @@ def entsoe_bronze_schema() -> "StructType":
 
     Mirrors exactly what `entsoe_bronze.build_bronze_records` emits.
     `business_type` was added after this table was first created in some
-    environments — see `docs/migrations/001_entsoe_bronze_add_business_type.sql`.
+    environments — see `migrations/001_entsoe_bronze_add_business_type.sql`.
     """
     return _struct_type(ENTSOE_BRONZE_FIELDS)
 
@@ -212,7 +212,7 @@ def ensure_schema_compatible(existing_schema: "StructType", expected_schema: "St
     raise SchemaMismatchError(
         f"'{table_name}' schema does not match the application-owned schema in code. "
         f"missing_columns={missing} extra_columns={extra} type_mismatches={type_mismatches}. "
-        "Resolve with an explicit migration (see docs/migrations/), not automatic MERGE "
+        "Resolve with an explicit migration (see migrations/), not automatic MERGE "
         "schema evolution."
     )
 
