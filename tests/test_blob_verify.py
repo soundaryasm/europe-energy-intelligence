@@ -5,6 +5,17 @@ module depends on: a left-anti join on the merge key. The point under
 test is the verdict — that a staged row with no Bronze counterpart is
 reported, and that a Bronze table legitimately larger than the staged
 set is not.
+
+**What these tests cannot catch.** The double compares keys as Python
+tuples, where `None == None` is True. SQL's equi-join is the opposite:
+`NULL = NULL` is false, so a row whose key column is NULL matches
+nothing. That difference hid a real defect — the join was written as an
+equi-join on the key columns and reported all 5.6M load and price rows
+(whose `production_type_raw` is NULL) as missing from a Bronze table
+that was complete. It surfaced only on a real run.
+
+Anything that depends on NULL comparison semantics therefore belongs in
+`test_blob_verify_spark.py`, against a real session, not here.
 """
 import pytest
 
@@ -79,6 +90,28 @@ class FakeSpark:
 
     def table(self, name):
         return KeyFrame(self._bronze)
+
+
+@pytest.fixture(autouse=True)
+def _stub_the_spark_join(monkeypatch):
+    """Replace the real anti-join with a Python set difference.
+
+    `verify.anti_join_on_keys` is the only part of the module with real
+    Spark semantics, and those are exactly what a double cannot
+    reproduce — Python tuples compare `None == None` as True, SQL does
+    not. Stubbing it keeps these tests honest about their scope: they
+    cover the verdict, the sampling, the missing-table case and the
+    read options. The join itself is covered in
+    `test_blob_verify_spark.py`.
+    """
+    def _anti_join(staged, bronze, key_cols):
+        present = set(bronze.select(*key_cols).keys)
+        return KeyFrame(
+            [k for k in staged.select(*key_cols).keys if k not in present],
+            key_cols,
+        )
+
+    monkeypatch.setattr(verify, "anti_join_on_keys", _anti_join)
 
 
 @pytest.fixture(autouse=True)

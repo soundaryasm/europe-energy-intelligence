@@ -57,6 +57,43 @@ class SourceVerification:
         )
 
 
+def anti_join_on_keys(staged, bronze, key_cols: Sequence[str]):
+    """Staged rows whose merge key has no counterpart in `bronze`.
+
+    Keys are compared the way the Bronze MERGE compares them
+    (`delta_schema._merge_condition`): `coalesce(col, '')` on both
+    sides, over the column cast to string.
+
+    Not an equi-join on the key columns, which is what this was
+    originally and which is wrong: SQL `NULL = NULL` is false, so every
+    row with a nullable key column unset matches nothing and is
+    reported absent. `production_type_raw` is NULL for every load and
+    price row — 5.6M of them — so verification failed against a Bronze
+    table that was in fact complete. A check that cannot tell "absent"
+    from "has a NULL in the key" is worse than no check.
+
+    The cast matters for World Bank's integer `year`. `coalesce` rather
+    than `eqNullSafe` keeps NULL and the empty string equivalent, which
+    is what the MERGE already treats as one key.
+
+    Kept as its own function because it is the one part of this module
+    with genuine Spark semantics: the fake-based tests cannot model
+    SQL NULL comparison, so they stub this out and
+    `test_blob_verify_spark.py` covers it against a real session.
+    """
+    from pyspark.sql import functions as F
+
+    staged_keys = staged.select(*key_cols).alias("s")
+    bronze_keys = bronze.select(*key_cols).alias("b")
+    condition = None
+    for col in key_cols:
+        same = F.coalesce(F.col(f"s.{col}").cast("string"), F.lit("")) == F.coalesce(
+            F.col(f"b.{col}").cast("string"), F.lit("")
+        )
+        condition = same if condition is None else (condition & same)
+    return staged_keys.join(bronze_keys, on=condition, how="left_anti")
+
+
 def verify_source(
     spark, source: str,
     volume_root: str = stager.DEFAULT_VOLUME_ROOT,
@@ -86,9 +123,7 @@ def verify_source(
     bronze = spark.table(table)
     verification.bronze_rows = bronze.count()
 
-    missing = staged.select(*key_cols).join(
-        bronze.select(*key_cols), on=list(key_cols), how="left_anti",
-    )
+    missing = anti_join_on_keys(staged, bronze, key_cols)
     verification.missing_rows = missing.count()
     if verification.missing_rows:
         verification.samples = [
