@@ -30,7 +30,14 @@ if _bundle_root and _bundle_root not in sys.path:
 # COMMAND ----------
 
 import os
+from datetime import date
 
+from src.orchestration.processing_window import (
+    DEFAULT_ENTSOE_LOOKBACK_DAYS,
+    VALID_EXECUTION_MODES,
+    resolve_entsoe_window,
+)
+from src.transformations.silver_window import date_key_bounds
 from src.serving.postgres_connection import connect, load_connection_config_from_env
 from src.serving.postgres_publisher import DEFAULT_TABLE_ORDER, publish
 from src.serving.postgres_schema import ALL_TABLE_DDL, INDEX_DDL
@@ -40,10 +47,44 @@ from src.serving.postgres_schema import ALL_TABLE_DDL, INDEX_DDL
 dbutils.widgets.text("gold_catalog", "", "Gold catalog.schema (e.g. main.gold)")
 dbutils.widgets.text("secret_scope", "europe-energy-intelligence", "Databricks secret scope")
 dbutils.widgets.text("secret_key", "POSTGRES_URL", "Databricks secret key")
+dbutils.widgets.dropdown("execution_mode", "daily", list(VALID_EXECUTION_MODES), "Execution mode")
+dbutils.widgets.text("start_date", "", "Start date (reprocess, YYYY-MM-DD)")
+dbutils.widgets.text("end_date", "", "End date (reprocess, YYYY-MM-DD)")
+dbutils.widgets.text(
+    "lookback_days", str(DEFAULT_ENTSOE_LOOKBACK_DAYS), "Daily-mode lookback (days)"
+)
 
 gold_catalog = dbutils.widgets.get("gold_catalog")
 secret_scope = dbutils.widgets.get("secret_scope")
 secret_key = dbutils.widgets.get("secret_key")
+execution_mode = dbutils.widgets.get("execution_mode")
+_start_param = dbutils.widgets.get("start_date")
+_end_param = dbutils.widgets.get("end_date")
+lookback_days = int(dbutils.widgets.get("lookback_days"))
+
+# Spec 005: "After the initial load, normal publication should process
+# only affected dates." Collecting every Gold row on every run means
+# pulling ~1M rows to the driver as Python dicts and upserting all of
+# them to add one day. The window is the same canonical one the
+# ingestion and Silver tasks use.
+#
+# Gold itself is still a full rebuild (its models are
+# `materialized='table'`), which is cheap because it reads Silver rather
+# than Bronze. The consequence is that changing a Gold calculation
+# leaves older serving rows stale until a `reprocess` run republishes
+# the affected range — that is what reprocess with an explicit
+# start_date/end_date is for.
+publish_start, publish_end = resolve_entsoe_window(
+    execution_mode,
+    start_date=date.fromisoformat(_start_param) if _start_param else None,
+    end_date=date.fromisoformat(_end_param) if _end_param else None,
+    lookback_days=lookback_days,
+)
+low_date_key, high_date_key = date_key_bounds(publish_start, publish_end)
+
+print(f"Execution mode:  {execution_mode}")
+print(f"Publish window:  {publish_start} to {publish_end} "
+      f"(date_key {low_date_key}..{high_date_key})")
 
 # Connection URL retrieved via Databricks-managed secrets only — never
 # hard-coded, never logged, never committed.
@@ -60,10 +101,21 @@ try:
             cursor.execute(statement)
     connection.commit()
 
-    tables = {
-        table_name: [row.asDict() for row in spark.table(f"{gold_catalog}.{table_name}").collect()]
-        for table_name in DEFAULT_TABLE_ORDER
-    }
+    # `dim_country` has no date grain and `dim_date` must stay complete
+    # for the fact tables' foreign keys to resolve, so both publish
+    # whole. They are 15 and ~4,700 rows. The facts carry `date_key` and
+    # are windowed.
+    UNWINDOWED_TABLES = {"dim_country", "dim_date"}
+
+    tables = {}
+    for table_name in DEFAULT_TABLE_ORDER:
+        df = spark.table(f"{gold_catalog}.{table_name}")
+        if table_name not in UNWINDOWED_TABLES:
+            df = df.filter(
+                (df["date_key"] >= low_date_key) & (df["date_key"] <= high_date_key)
+            )
+        tables[table_name] = [row.asDict() for row in df.collect()]
+        print(f"  {table_name}: {len(tables[table_name])} row(s) to publish")
 
     result = publish(connection, tables)
 

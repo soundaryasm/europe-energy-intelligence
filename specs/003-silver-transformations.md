@@ -559,3 +559,16 @@ This specification does not include:
 - forecasting
 - streaming
 - hourly analytical reporting
+
+## Processing Window
+
+Silver processes the canonical processing window (Spec 006), not the whole Bronze table. A `daily` run rebuilds the few days the ingestion tasks just fetched; a `reprocess` run with an explicit `start_date`/`end_date` is how a wider range, including the full history, is rebuilt. Reading all of Bronze on every run was affordable only while the history was empty — with 2015-01 onward loaded it means reprocessing tens of millions of rows to add a single day.
+
+Nothing in Silver depends on a neighbouring date, so a windowed run produces the same rows as a full one. Both window functions in use partition by `country_code` and `local_date` (resolution preference and merge-key dedupe), and the Gold layer has no cross-date logic either.
+
+Bronze is read with one whole day of padding either side of the window, and the output is then restricted to the window itself. Both halves are required:
+
+- Silver's grain is `local_date`, the date in the country's timezone, while Bronze stores `source_timestamp` in UTC. European offsets run UTC+0 to UTC+3, so a local day draws on UTC instants outside its own UTC day. Reading exactly the window's UTC days would build its edge days from partial data.
+- Padding alone would be worse. The padded input yields rows for local dates just outside the window, computed from incomplete data, and the Silver write merges on `(country_code, local_date)` — so a partial edge day would overwrite a complete day an earlier run had landed.
+
+Restricting the output means edge days are computed from complete input and only whole days are written. See `src/transformations/silver_window.py`.

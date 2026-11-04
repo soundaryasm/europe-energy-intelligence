@@ -239,6 +239,12 @@ Do not depend on:
 
 After the initial load, normal publication should process only affected dates.
 
+This is implemented by filtering the Gold fact tables on `date_key` to the canonical processing window (Spec 006) before collecting them, rather than reading every Gold row on every run. Publishing the whole of Gold nightly means pulling roughly a million rows to the driver as Python dictionaries and upserting all of them to add one day's worth.
+
+`dim_country` and `dim_date` publish whole. Neither has a date grain to window by — `dim_country` is 15 rows, and `dim_date` must stay complete or the fact tables' foreign keys would not resolve.
+
+Gold itself remains a full rebuild, because its models read Silver rather than Bronze and the cost is small. The consequence is that changing a Gold calculation leaves older serving rows stale until a `reprocess` run republishes the affected range; that is what an explicit `start_date`/`end_date` is for.
+
 Affected dates may include:
 
 - newly completed dates

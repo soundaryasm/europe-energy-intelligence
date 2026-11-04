@@ -30,6 +30,26 @@ resources:
     europe_energy_intelligence_historical_rebuild:
       name: "European Energy Intelligence - Historical Silver/Gold Rebuild"
 
+      # Silver and the serving publish are windowed (Spec 006 canonical
+      # processing window): the daily job passes a 3-day `daily` window,
+      # and this job passes the whole history explicitly. `reprocess`
+      # requires both dates, deliberately — a defaulted range is exactly
+      # the thing that gets run by accident against the wrong window.
+      #
+      # `end_date` is the last date the historical blob layer covers
+      # plus the days the daily pipeline has since ingested. Override it
+      # at run time rather than editing this file:
+      #   --params end_date=YYYY-MM-DD
+      parameters:
+        - name: execution_mode
+          default: "reprocess"
+        - name: start_date
+          default: "2015-01-01"
+        - name: end_date
+          default: ""
+        - name: lookback_days
+          default: "3"
+
       environments:
         - environment_key: python_notebook_env
           spec:
@@ -58,6 +78,10 @@ resources:
             base_parameters:
               # See the notebook's own sys.path bootstrap comment for why.
               bundle_root: "${workspace.file_path}"
+              execution_mode: "{{job.parameters.execution_mode}}"
+              start_date: "{{job.parameters.start_date}}"
+              end_date: "{{job.parameters.end_date}}"
+              lookback_days: "{{job.parameters.lookback_days}}"
           timeout_seconds: 10800
 
         - task_key: build_dbt_gold
@@ -93,6 +117,10 @@ resources:
               gold_catalog: "workspace.gold" # matches the validated Gold location (Unity Catalog "workspace" catalog, "gold" schema)
               secret_scope: "${var.postgres_secret_scope}"
               bundle_root: "${workspace.file_path}"
+              execution_mode: "{{job.parameters.execution_mode}}"
+              start_date: "{{job.parameters.start_date}}"
+              end_date: "{{job.parameters.end_date}}"
+              lookback_days: "{{job.parameters.lookback_days}}"
           timeout_seconds: 7200
 
       email_notifications: {}
