@@ -3,12 +3,13 @@
 The real Open-Meteo API is an external system, so every test here mocks
 the HTTP session with `unittest.mock` — no network calls are made.
 """
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import MagicMock
 
 import pytest
 import requests
 
+from src.ingestion import open_meteo_client
 from src.ingestion.open_meteo_client import (
     OpenMeteoAPIError,
     OpenMeteoRequest,
@@ -152,3 +153,65 @@ def test_fetch_weather_raises_on_missing_expected_variable():
 
     with pytest.raises(OpenMeteoAPIError):
         fetch_weather(SAMPLE_REQUEST, session=session)
+
+
+class TestSelectEndpoint:
+    """Endpoint choice is a function of date, never of execution_mode.
+
+    The original rule branched on execution_mode — `daily` took
+    Forecast, anything else took Archive. It was wrong because mode says
+    nothing about whether a date has settled: a `reprocess` run over a
+    date four days old was sent to Archive, where ERA5 had not settled
+    it, and the task ran for an hour before its timeout killed it
+    without writing a row. These tests pin the replacement so that
+    cannot come back.
+    """
+
+    REFERENCE = date(2026, 11, 5)
+
+    def test_a_recent_date_takes_the_forecast_api(self):
+        url, label = open_meteo_client.select_endpoint(
+            date(2026, 11, 1), reference_date=self.REFERENCE
+        )
+        assert url == open_meteo_client.OPEN_METEO_FORECAST_URL
+        assert label == open_meteo_client.SOURCE_ENDPOINT_FORECAST
+
+    def test_a_settled_date_takes_the_archive_api(self):
+        url, label = open_meteo_client.select_endpoint(
+            date(2015, 1, 1), reference_date=self.REFERENCE
+        )
+        assert url == open_meteo_client.OPEN_METEO_ARCHIVE_URL
+        assert label == open_meteo_client.SOURCE_ENDPOINT
+
+    def test_the_boundary_day_is_still_forecast(self):
+        # FORECAST_MAX_AGE_DAYS is inclusive: at exactly the limit the
+        # Forecast API still returns real values.
+        boundary = self.REFERENCE - timedelta(
+            days=open_meteo_client.FORECAST_MAX_AGE_DAYS
+        )
+        url, _ = open_meteo_client.select_endpoint(boundary, reference_date=self.REFERENCE)
+        assert url == open_meteo_client.OPEN_METEO_FORECAST_URL
+
+    def test_one_day_past_the_boundary_switches_to_archive(self):
+        past = self.REFERENCE - timedelta(
+            days=open_meteo_client.FORECAST_MAX_AGE_DAYS + 1
+        )
+        url, _ = open_meteo_client.select_endpoint(past, reference_date=self.REFERENCE)
+        assert url == open_meteo_client.OPEN_METEO_ARCHIVE_URL
+
+    def test_the_limit_stays_inside_the_measured_null_cliff(self):
+        # Measured against the live API on 2026-11-05: real values at
+        # 30/45/52 days back, every field null at 60/75/90. A limit at
+        # or past the cliff would write nulls into Bronze, which
+        # `build_bronze_records` does not filter.
+        assert open_meteo_client.FORECAST_MAX_AGE_DAYS < 52
+
+    def test_a_window_straddling_the_cliff_takes_archive(self):
+        # select_endpoint is given the window's OLDEST date, so Forecast
+        # is chosen only when the whole window is inside retention.
+        # Archive's recent values are provisional but real; Forecast's
+        # older ones would be null.
+        url, _ = open_meteo_client.select_endpoint(
+            date(2026, 8, 1), reference_date=self.REFERENCE
+        )
+        assert url == open_meteo_client.OPEN_METEO_ARCHIVE_URL

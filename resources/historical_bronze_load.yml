@@ -46,6 +46,11 @@ resources:
             dependencies:
               - -r ${workspace.file_path}/requirements.txt
 
+      # Hard ceiling on the whole load. The longest this job has ever taken
+      # is 7.5 minutes, merging 36.5M rows (2026-11-04). 2 hours is ~16x
+      # that, and bounds what was previously an unlimited 7-hour stack.
+      timeout_seconds: 7200
+
       tasks:
         - task_key: stage_historical
           environment_key: python_notebook_env
@@ -62,7 +67,7 @@ resources:
           # HTTPS downloads. Generous enough that a slow bucket does not
           # fail the task, since a timeout here wastes the downloads
           # already done.
-          timeout_seconds: 7200
+          timeout_seconds: 2700
 
         - task_key: load_historical
           environment_key: python_notebook_env
@@ -75,7 +80,7 @@ resources:
               sources: "{{job.parameters.sources}}"
               resume: "{{job.parameters.resume}}"
               bundle_root: "${workspace.file_path}"
-          timeout_seconds: 10800
+          timeout_seconds: 3600
           # No task-level retry. A failure here needs looking at before
           # being repeated — the load reports which batches failed, and
           # a blind retry just re-merges what already succeeded.
@@ -91,6 +96,6 @@ resources:
               sources: "{{job.parameters.sources}}"
               bundle_root: "${workspace.file_path}"
           # A left-anti join per source over the full staged history.
-          timeout_seconds: 7200
+          timeout_seconds: 1800
 
       email_notifications: {}

@@ -70,6 +70,14 @@ resources:
             dependencies:
               - dbt-databricks==1.8.5
 
+      # Hard ceiling on the whole rebuild. The longest this job has ever
+      # taken is 5.3 minutes, over the full 2015-2026 history (2026-11-04).
+      # 90 minutes is ~17x that - generous, because a legitimate slow run
+      # here is rare and expensive to lose - while still bounding a hang,
+      # which previously could stack 8 hours against the Free Edition
+      # allowance with nothing to stop it.
+      timeout_seconds: 5400
+
       tasks:
         - task_key: transform_silver
           environment_key: python_notebook_env
@@ -82,7 +90,7 @@ resources:
               start_date: "{{job.parameters.start_date}}"
               end_date: "{{job.parameters.end_date}}"
               lookback_days: "{{job.parameters.lookback_days}}"
-          timeout_seconds: 10800
+          timeout_seconds: 2700
 
         - task_key: build_dbt_gold
           environment_key: dbt_env
@@ -102,7 +110,7 @@ resources:
               - "dbt run"
               - "dbt test"
             warehouse_id: "${var.sql_warehouse_id}"
-          timeout_seconds: 10800
+          timeout_seconds: 2700
 
         # Spec 007 data-quality gate: publish only runs if dbt (and its
         # tests) succeeded — a failed/known-invalid Gold build never
@@ -121,6 +129,6 @@ resources:
               start_date: "{{job.parameters.start_date}}"
               end_date: "{{job.parameters.end_date}}"
               lookback_days: "{{job.parameters.lookback_days}}"
-          timeout_seconds: 7200
+          timeout_seconds: 1800
 
       email_notifications: {}

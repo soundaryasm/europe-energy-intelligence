@@ -29,6 +29,15 @@ resources:
       # and standard time (02:00 UTC = 03:00 Dublin in summer, 02:00
       # Dublin in winter) instead of staying fixed at 2 hours past
       # local midnight year-round.
+      # Hard ceiling on the whole run, the backstop the task-level
+      # timeouts above cannot provide: they bound one task each, so a
+      # bad night could still stack six of them plus their retries.
+      # A normal run is ~7 minutes. 45 minutes leaves room for the one
+      # expensive case — ingest_entsoe failing and waiting out its
+      # 15-minute retry gap (~24 min all in) — and kills anything
+      # beyond that rather than burning the Free Edition allowance.
+      timeout_seconds: 2700
+
       schedule:
         quartz_cron_expression: "0 0 2 * * ?"
         timezone_id: "UTC"
@@ -89,7 +98,7 @@ resources:
               lookback_days: "{{job.parameters.lookback_days}}"
               # See the notebook's own sys.path bootstrap comment for why.
               bundle_root: "${workspace.file_path}"
-          timeout_seconds: 3600
+          timeout_seconds: 600
           # Same reasoning as ingest_entsoe, with a shorter interval:
           # Open-Meteo publishes no rate-limit ban window, so there is
           # nothing to wait out beyond a transient fault.
@@ -131,7 +140,7 @@ resources:
               secret_scope: "${var.entsoe_secret_scope}"
               secret_key: "ENTSOE_API_TOKEN"
               bundle_root: "${workspace.file_path}"
-          timeout_seconds: 3600
+          timeout_seconds: 900
           # ENTSO-E is intermittently unreliable: observed on 2026-11-04
           # returning non-XML bodies and read timeouts across five
           # countries at once, which tripped the circuit breaker and
@@ -173,7 +182,7 @@ resources:
             notebook_path: "${workspace.file_path}/notebooks/ingestion/worldbank_ingestion"
             base_parameters:
               bundle_root: "${workspace.file_path}"
-          timeout_seconds: 1800
+          timeout_seconds: 300
           # Same retry treatment as the other ingest tasks. The data is
           # annual rather than daily, but that is not a reason to try
           # less hard: this fetches the whole current year every night,
@@ -203,7 +212,7 @@ resources:
               start_date: "{{job.parameters.start_date}}"
               end_date: "{{job.parameters.end_date}}"
               lookback_days: "{{job.parameters.lookback_days}}"
-          timeout_seconds: 3600
+          timeout_seconds: 600
           max_retries: 1
           min_retry_interval_millis: 300000
 
@@ -226,7 +235,7 @@ resources:
               - "dbt run"
               - "dbt test"
             warehouse_id: "${var.sql_warehouse_id}"
-          timeout_seconds: 3600
+          timeout_seconds: 600
           max_retries: 1
           min_retry_interval_millis: 300000
 
@@ -247,7 +256,7 @@ resources:
               start_date: "{{job.parameters.start_date}}"
               end_date: "{{job.parameters.end_date}}"
               lookback_days: "{{job.parameters.lookback_days}}"
-          timeout_seconds: 1800
+          timeout_seconds: 300
           # Two here, unlike the ingest tasks: this is the last task, so
           # a retry re-does only the publish — Bronze, Silver and Gold
           # are already committed — and Neon's compute scales to zero

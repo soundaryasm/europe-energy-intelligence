@@ -34,6 +34,41 @@ SOURCE_ENDPOINT = "archive_daily"
 OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 SOURCE_ENDPOINT_FORECAST = "forecast_daily"
 
+# How far back the Forecast API still returns real values. Beyond its
+# retention it answers HTTP 200 with every daily field null, which
+# `build_bronze_records` has no filter for — so an over-wide Forecast
+# window writes nulls into Bronze instead of failing. Measured against
+# the live API on 2026-11-05 from a fixed point: real data at 30, 45 and
+# 52 days back, all three fields null at 60, 75 and 90. The cliff sits
+# between 52 and 60 days and moves as retention rolls forward, so this
+# is set well inside it rather than at the edge.
+FORECAST_MAX_AGE_DAYS = 45
+
+
+def select_endpoint(
+    start_date: date, *, reference_date: Optional[date] = None
+) -> tuple:
+    """`(endpoint_url, source_endpoint_label)` for a window starting `start_date`.
+
+    Chosen by *date*, never by execution_mode. Mode was the original
+    rule — `daily` took Forecast, anything else took Archive — and it is
+    wrong because mode says nothing about whether a date has settled. A
+    `reprocess` run over a date from last week was sent to Archive,
+    where ERA5 has not settled it; the task then ran for an hour and was
+    killed by its timeout without writing a row.
+
+    `start_date` is the oldest date the window needs, so Forecast is
+    only chosen when the *whole* window is inside its retention. A
+    window straddling the cliff goes to Archive, whose recent values are
+    provisional but real, rather than to Forecast, which would return
+    nulls for the older part.
+    """
+    reference = reference_date or date.today()
+    age_days = (reference - start_date).days
+    if age_days <= FORECAST_MAX_AGE_DAYS:
+        return OPEN_METEO_FORECAST_URL, SOURCE_ENDPOINT_FORECAST
+    return OPEN_METEO_ARCHIVE_URL, SOURCE_ENDPOINT
+
 # Spec 001: "Use Open-Meteo daily variables where available rather than
 # retrieving hourly observations solely to calculate daily averages...
 # The MVP does not require hourly weather ingestion." The Historical

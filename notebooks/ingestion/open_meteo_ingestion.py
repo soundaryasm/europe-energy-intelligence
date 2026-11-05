@@ -30,15 +30,9 @@ if _bundle_root and _bundle_root not in sys.path:
 
 from datetime import date
 
-from src.ingestion.open_meteo_client import (
-    OPEN_METEO_ARCHIVE_URL,
-    OPEN_METEO_FORECAST_URL,
-    SOURCE_ENDPOINT,
-    SOURCE_ENDPOINT_FORECAST,
-)
+from src.ingestion.open_meteo_client import select_endpoint
 from src.ingestion.open_meteo_pipeline import run_ingestion
 from src.orchestration.processing_window import (
-    DAILY,
     DEFAULT_OPEN_METEO_LOOKBACK_DAYS,
     VALID_EXECUTION_MODES,
     resolve_open_meteo_window,
@@ -72,14 +66,11 @@ start_date, end_date = resolve_open_meteo_window(
 
 # COMMAND ----------
 
-# `daily` mode targets recent dates, which the Historical/Archive API
-# (ERA5 reanalysis) has not yet settled for — use the Forecast API
-# instead (operational models, refreshed every 1-6 hours). `reprocess`
-# targets older, already-settled dates, where Archive is right.
-if execution_mode == DAILY:
-    endpoint_url, source_endpoint_label = OPEN_METEO_FORECAST_URL, SOURCE_ENDPOINT_FORECAST
-else:
-    endpoint_url, source_endpoint_label = OPEN_METEO_ARCHIVE_URL, SOURCE_ENDPOINT
+# Chosen from the window's oldest date, not from execution_mode. Recent
+# dates go to the Forecast API, whose operational models refresh every
+# 1-6 hours; settled dates go to Archive (ERA5), which has a real
+# settlement lag. See `select_endpoint` for why mode was the wrong rule.
+endpoint_url, source_endpoint_label = select_endpoint(start_date)
 
 result = run_ingestion(
     start_date, end_date, spark=spark,
