@@ -5,10 +5,10 @@
 # MAGIC Workflow entry point for the `ingest_entsoe` task. All business logic
 # MAGIC lives in `src/ingestion/entsoe_pipeline.py`; this notebook only reads
 # MAGIC job parameters, resolves the canonical processing window (Spec 006 —
-# MAGIC `daily` mode reprocesses a rolling `lookback_days`-day window, not just
-# MAGIC yesterday, because ENTSO-E values may be revised after first
-# MAGIC publication), retrieves the ENTSO-E security token from Databricks
-# MAGIC secrets, and wires up the active `spark` session.
+# MAGIC a rolling `lookback_days`-day window, not just yesterday, because
+# MAGIC ENTSO-E values may be revised after first publication), retrieves the
+# MAGIC ENTSO-E security token from Databricks secrets, and wires up the
+# MAGIC active `spark` session.
 # MAGIC
 # MAGIC This notebook must be executed on Databricks — it relies on `dbutils`
 # MAGIC and `spark`, which only exist in a Databricks notebook runtime.
@@ -43,23 +43,19 @@ from datetime import date
 
 from src.ingestion.entsoe_pipeline import run_ingestion
 from src.orchestration.processing_window import (
-    DEFAULT_ENTSOE_LOOKBACK_DAYS,
-    VALID_EXECUTION_MODES,
-    resolve_entsoe_window,
+    DEFAULT_LOOKBACK_DAYS,
+    entsoe_fetch_window,
+    resolve_window,
 )
 
 # COMMAND ----------
 
-dbutils.widgets.dropdown("execution_mode", "daily", list(VALID_EXECUTION_MODES), "Execution mode")
-dbutils.widgets.text("start_date", "", "Start date (reprocess, YYYY-MM-DD)")
-dbutils.widgets.text("end_date", "", "End date (reprocess, YYYY-MM-DD)")
-dbutils.widgets.text(
-    "lookback_days", str(DEFAULT_ENTSOE_LOOKBACK_DAYS), "Daily-mode recent-date lookback (days)"
-)
+dbutils.widgets.text("start_date", "", "Start date (YYYY-MM-DD; blank = lookback_days back)")
+dbutils.widgets.text("end_date", "", "End date (YYYY-MM-DD; blank = latest completed date)")
+dbutils.widgets.text("lookback_days", str(DEFAULT_LOOKBACK_DAYS), "Lookback when start_date is blank (days)")
 dbutils.widgets.text("secret_scope", "europe-energy-intelligence", "Databricks secret scope")
 dbutils.widgets.text("secret_key", "ENTSOE_API_TOKEN", "Databricks secret key")
 
-execution_mode = dbutils.widgets.get("execution_mode")
 start_date_param = dbutils.widgets.get("start_date")
 end_date_param = dbutils.widgets.get("end_date")
 lookback_days = int(dbutils.widgets.get("lookback_days"))
@@ -71,12 +67,15 @@ secret_key = dbutils.widgets.get("secret_key")
 explicit_start = date.fromisoformat(start_date_param) if start_date_param else None
 explicit_end = date.fromisoformat(end_date_param) if end_date_param else None
 
-start_date, end_date = resolve_entsoe_window(
-    execution_mode,
+start_date, end_date = resolve_window(
     start_date=explicit_start,
     end_date=explicit_end,
     lookback_days=lookback_days,
 )
+
+# ENTSO-E is asked for one extra day at the start, so the first local
+# hour of the window's oldest day is covered — see `entsoe_fetch_window`.
+fetch_start, fetch_end = entsoe_fetch_window(start_date, end_date)
 
 # COMMAND ----------
 
@@ -84,10 +83,10 @@ start_date, end_date = resolve_entsoe_window(
 # never logged, never committed.
 security_token = dbutils.secrets.get(scope=secret_scope, key=secret_key)
 
-result = run_ingestion(start_date, end_date, token=security_token, spark=spark)
+result = run_ingestion(fetch_start, fetch_end, token=security_token, spark=spark)
 
-print(f"Execution mode:        {execution_mode}")
-print(f"Requested range:       {result.start_date} to {result.end_date}")
+print(f"Processing window:     {start_date} to {end_date}")
+print(f"Fetched range:         {result.start_date} to {result.end_date}")
 print(f"Countries attempted:   {result.countries_attempted}")
 print(f"Datasets attempted:    {result.datasets_attempted}")
 print(f"Succeeded (country:dataset):    {result.succeeded}")

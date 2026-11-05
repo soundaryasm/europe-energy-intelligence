@@ -4,8 +4,14 @@ Spec 006 requires one canonical processing window passed to downstream
 tasks rather than each task deriving its own. Silver and the serving
 publish read that window from job parameters, so a task left without
 them would silently fall back to the notebook widget defaults — a
-3-day `daily` window — and quietly publish almost nothing during a
-historical rebuild. Static YAML checks only; no workspace is contacted.
+3-day trailing window — and quietly publish almost nothing during a
+full-history rebuild. Static YAML checks only; no workspace is
+contacted.
+
+The window is two optional dates. `execution_mode` and `lookback_days`
+were removed: an explicit `start_date` already says everything a
+relative lookback said, and the mode had leaked into choosing an
+Open-Meteo endpoint.
 """
 from pathlib import Path
 
@@ -14,7 +20,7 @@ import yaml
 
 RESOURCES = Path(__file__).resolve().parents[1] / "resources"
 
-WINDOW_PARAMS = ("execution_mode", "start_date", "end_date", "lookback_days")
+WINDOW_PARAMS = ("start_date", "end_date")
 
 # Task key -> the file and job it belongs to. Every notebook task that
 # resolves a processing window must appear here.
@@ -23,8 +29,6 @@ WINDOWED_TASKS = (
     ("daily_pipeline.yml", "europe_energy_intelligence_daily", "ingest_open_meteo"),
     ("daily_pipeline.yml", "europe_energy_intelligence_daily", "transform_silver"),
     ("daily_pipeline.yml", "europe_energy_intelligence_daily", "publish_postgres"),
-    ("historical_rebuild.yml", "europe_energy_intelligence_historical_rebuild", "transform_silver"),
-    ("historical_rebuild.yml", "europe_energy_intelligence_historical_rebuild", "publish_postgres"),
 )
 
 
@@ -49,35 +53,36 @@ def test_a_windowed_task_receives_every_window_parameter(filename, job_key, task
         )
 
 
-@pytest.mark.parametrize("filename,job_key", [
-    ("daily_pipeline.yml", "europe_energy_intelligence_daily"),
-    ("historical_rebuild.yml", "europe_energy_intelligence_historical_rebuild"),
-])
-def test_the_job_declares_every_window_parameter(filename, job_key):
-    declared = {p["name"] for p in _job(filename, job_key)["parameters"]}
+def test_the_job_declares_every_window_parameter():
+    declared = {p["name"] for p in
+                _job("daily_pipeline.yml", "europe_energy_intelligence_daily")["parameters"]}
     assert set(WINDOW_PARAMS) <= declared
 
 
-def test_the_daily_job_defaults_to_a_narrow_daily_window():
-    # A scheduled run must never span the history (Spec 006).
+def test_the_window_is_exactly_two_parameters():
+    # Nothing else belongs here. `lookback_days` was the same knob as
+    # `start_date` stated relatively, and `execution_mode` chose between
+    # the two, which two optional dates already express.
+    declared = {p["name"] for p in
+                _job("daily_pipeline.yml", "europe_energy_intelligence_daily")["parameters"]}
+    assert declared == set(WINDOW_PARAMS)
+
+
+def test_the_scheduled_run_ships_both_dates_blank():
+    # Blank means "the trailing lookback", so a scheduled run never
+    # spans the history (Spec 006). A date baked in here would also go
+    # stale the day after it was written.
     params = {p["name"]: p["default"] for p in
               _job("daily_pipeline.yml", "europe_energy_intelligence_daily")["parameters"]}
-    assert params["execution_mode"] == "daily"
     assert params["start_date"] == ""
     assert params["end_date"] == ""
-    assert int(params["lookback_days"]) <= 7
 
 
-def test_the_rebuild_job_defaults_to_reprocess_from_the_start_of_history():
-    params = {p["name"]: p["default"] for p in
-              _job("historical_rebuild.yml",
-                   "europe_energy_intelligence_historical_rebuild")["parameters"]}
-    assert params["execution_mode"] == "reprocess"
-    assert params["start_date"] == "2015-01-01"
-    # Deliberately empty: reprocess requires an explicit end_date, so a
-    # run that forgets to pass one fails loudly instead of silently
-    # rebuilding a stale range.
-    assert params["end_date"] == ""
+def test_the_rebuild_job_no_longer_exists():
+    # It was the daily job's last three tasks with different defaults.
+    # `databricks bundle run ... --only transform_silver+` runs exactly
+    # that chain from the one job, so the duplicate was deleted.
+    assert not (RESOURCES / "historical_rebuild.yml").exists()
 
 
 # --- Unattended-run resilience -----------------------------------------

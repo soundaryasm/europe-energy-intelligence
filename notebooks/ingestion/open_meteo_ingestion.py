@@ -33,21 +33,16 @@ from datetime import date
 from src.ingestion.open_meteo_client import select_endpoint
 from src.ingestion.open_meteo_pipeline import run_ingestion
 from src.orchestration.processing_window import (
-    DEFAULT_OPEN_METEO_LOOKBACK_DAYS,
-    VALID_EXECUTION_MODES,
-    resolve_open_meteo_window,
+    DEFAULT_LOOKBACK_DAYS,
+    resolve_window,
 )
 
 # COMMAND ----------
 
-dbutils.widgets.dropdown("execution_mode", "daily", list(VALID_EXECUTION_MODES), "Execution mode")
-dbutils.widgets.text("start_date", "", "Start date (reprocess, YYYY-MM-DD)")
-dbutils.widgets.text("end_date", "", "End date (reprocess, YYYY-MM-DD)")
-dbutils.widgets.text(
-    "lookback_days", str(DEFAULT_OPEN_METEO_LOOKBACK_DAYS), "Daily-mode recent-date lookback (days)"
-)
+dbutils.widgets.text("start_date", "", "Start date (YYYY-MM-DD; blank = lookback_days back)")
+dbutils.widgets.text("end_date", "", "End date (YYYY-MM-DD; blank = latest completed date)")
+dbutils.widgets.text("lookback_days", str(DEFAULT_LOOKBACK_DAYS), "Lookback when start_date is blank (days)")
 
-execution_mode = dbutils.widgets.get("execution_mode")
 start_date_param = dbutils.widgets.get("start_date")
 end_date_param = dbutils.widgets.get("end_date")
 lookback_days = int(dbutils.widgets.get("lookback_days"))
@@ -60,16 +55,17 @@ explicit_end = date.fromisoformat(end_date_param) if end_date_param else None
 # `reprocess` requires both dates explicitly: re-running a range is a
 # deliberate, operator-chosen act, and a defaulted range is exactly the
 # kind of thing that gets run by accident against the wrong window.
-start_date, end_date = resolve_open_meteo_window(
-    execution_mode, start_date=explicit_start, end_date=explicit_end, lookback_days=lookback_days
+start_date, end_date = resolve_window(
+    start_date=explicit_start, end_date=explicit_end, lookback_days=lookback_days
 )
 
 # COMMAND ----------
 
-# Chosen from the window's oldest date, not from execution_mode. Recent
+# Chosen from the window's oldest date. Recent
 # dates go to the Forecast API, whose operational models refresh every
 # 1-6 hours; settled dates go to Archive (ERA5), which has a real
-# settlement lag. See `select_endpoint` for why mode was the wrong rule.
+# settlement lag. See `select_endpoint` for why the old mode-based rule
+# was wrong.
 endpoint_url, source_endpoint_label = select_endpoint(start_date)
 
 result = run_ingestion(
@@ -77,7 +73,6 @@ result = run_ingestion(
     endpoint_url=endpoint_url, source_endpoint_label=source_endpoint_label,
 )
 
-print(f"Execution mode:      {execution_mode}")
 print(f"Requested range:     {result.start_date} to {result.end_date}")
 print(f"Countries attempted: {result.countries_attempted}")
 print(f"Countries succeeded: {result.countries_succeeded}")

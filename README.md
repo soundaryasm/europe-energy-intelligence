@@ -70,12 +70,26 @@ failed combination is retried without re-fetching what already succeeded.
 |---|---|---|
 | `..._daily` | 02:00 UTC | Ingest → Silver → Gold → PostgreSQL |
 | `..._historical_bronze_load` | manual | Blob Parquet → Bronze |
-| `..._historical_rebuild` | manual | Silver → Gold → PostgreSQL over full history |
-| `historical-backfill` (Actions) | dispatch | One year of history → blob storage |
+| `historical-backfill` (Actions) | disabled | One year of history → blob storage |
 
-Silver and the PostgreSQL publish process a rolling window
-(`lookback_days`, default 3). A `reprocess` run with explicit
-`start_date`/`end_date` covers any wider range.
+The backfill completed on 2026-11-04 and both historical jobs are now
+dormant: the Actions workflow is guarded off and the blob bucket it
+staged from has been emptied. `archive/historical-backfill/` holds the
+record. Any stage can be re-run from the daily job.
+
+The window is two optional job parameters, `start_date` and `end_date`.
+Both blank — what the schedule sends — means the last 3 completed days.
+A blank `end_date` is the latest completed UTC date; a blank `start_date`
+is the lookback behind that end.
+
+```bash
+# any single stage, plus everything downstream of it
+databricks bundle run <job> -t prod --only transform_silver+
+
+# a one-day repair, or the full history
+--params start_date=2026-11-01
+--params start_date=2015-01-01
+```
 
 ## Layout
 

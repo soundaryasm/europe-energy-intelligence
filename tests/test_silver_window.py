@@ -67,7 +67,7 @@ def test_date_key_bounds_reject_an_inverted_window():
 
 
 def test_the_full_history_window_spans_every_loaded_year():
-    # The default range `historical_rebuild.yml` passes.
+    # A full-history range, as `--params start_date=2015-01-01` passes.
     low, high = bronze_bounds(date(2015, 1, 1), date(2026, 11, 3))
     assert low == "2014-12-31"
     assert high == "2026-11-05"

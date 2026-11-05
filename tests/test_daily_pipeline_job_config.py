@@ -43,18 +43,22 @@ def test_job_schedule_is_02_00_utc():
     assert job["schedule"]["quartz_cron_expression"] == "0 0 2 * * ?"
 
 
-def test_job_supports_daily_and_reprocess_parameters():
+def test_job_takes_the_window_as_two_optional_dates():
+    # Both blank is what the schedule ships: the code then resolves the
+    # end to the latest completed UTC date and the start to the trailing
+    # lookback. A manual run overrides either or both.
     job = _load_job()
-    param_names = {p["name"] for p in job["parameters"]}
-    assert {"execution_mode", "start_date", "end_date", "lookback_days"} <= param_names
-    mode_param = next(p for p in job["parameters"] if p["name"] == "execution_mode")
-    assert mode_param["default"] == "daily"  # scheduled runs never default to reprocess
+    params = {p["name"]: p["default"] for p in job["parameters"]}
+    assert set(params) == {"start_date", "end_date"}
+    assert params["start_date"] == ""
+    assert params["end_date"] == ""
 
 
-def test_entsoe_task_receives_the_canonical_lookback_days_parameter():
+def test_entsoe_task_receives_the_canonical_window():
     tasks = _tasks_by_key(_load_job())
     base_params = tasks["ingest_entsoe"]["notebook_task"]["base_parameters"]
-    assert base_params["lookback_days"] == "{{job.parameters.lookback_days}}"
+    assert base_params["start_date"] == "{{job.parameters.start_date}}"
+    assert base_params["end_date"] == "{{job.parameters.end_date}}"
 
 
 def test_ingestion_tasks_have_no_dependencies():

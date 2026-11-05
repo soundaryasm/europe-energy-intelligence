@@ -59,16 +59,37 @@ def test_every_task_declares_a_timeout():
 # would fail a run for being briefly slow rather than for hanging.
 MIN_TASK_TIMEOUT_SECONDS = 300
 
+# transform_silver and build_dbt_gold also carry the full-history
+# rebuild that the deleted historical_rebuild job used to own — run as
+# `--only transform_silver+ --params start_date=2015-01-01`. Their
+# ceiling is measured against that, not against a 3-day window: the
+# longest full-decade rebuild observed was 318s (2026-11-04).
+FULL_REBUILD_SECONDS = 318
+REBUILD_TASKS = ("transform_silver", "build_dbt_gold")
+
 
 def test_no_task_timeout_is_wildly_above_its_real_runtime():
     # 10x observed is generous for a slow upstream or a cold start, and
     # still cheap to lose. Beyond that the timeout stops being a guard.
     for key, observed in OBSERVED.items():
         timeout = _tasks()[key]["timeout_seconds"]
-        ceiling = max(observed * 10, MIN_TASK_TIMEOUT_SECONDS)
+        baseline = FULL_REBUILD_SECONDS if key in REBUILD_TASKS else observed
+        ceiling = max(baseline * 10, MIN_TASK_TIMEOUT_SECONDS)
         assert timeout <= ceiling, (
             f"{key}: timeout {timeout}s exceeds {ceiling}s "
-            f"(10x its observed {observed}s, floor {MIN_TASK_TIMEOUT_SECONDS}s)"
+            f"(10x its baseline {baseline}s, floor {MIN_TASK_TIMEOUT_SECONDS}s)"
+        )
+
+
+def test_the_rebuild_tasks_have_room_for_a_full_history_run():
+    # They inherited that work when historical_rebuild was deleted, so a
+    # timeout sized only for a 3-day window would kill a legitimate
+    # rebuild.
+    for key in REBUILD_TASKS:
+        timeout = _tasks()[key]["timeout_seconds"]
+        assert timeout >= FULL_REBUILD_SECONDS * 2, (
+            f"{key}: timeout {timeout}s leaves too little margin over the "
+            f"{FULL_REBUILD_SECONDS}s a full-history rebuild has taken"
         )
 
 
@@ -97,13 +118,11 @@ def test_a_slow_entsoe_retry_still_fits_inside_the_job_cap():
     assert worst_entsoe + downstream < _job()["timeout_seconds"]
 
 
-# The two manual jobs. Their longest observed runs, in seconds, from the
-# full historical sequence on 2026-11-04: the Silver/Gold rebuild over
-# all of 2015-2026 took 318s, and the Bronze load merging 36.5M rows
-# took 450s. Their task timeouts were originally 2-3 hours each, 24-40x
-# reality, with no job-level cap — 8h and 7h of unbounded stack.
+# The one remaining manual job. Its longest observed run was 450s,
+# merging 36.5M rows (2026-11-04). Its task timeouts were originally
+# 2-3 hours each, 24-40x reality, with no job-level cap — 7h of
+# unbounded stack.
 MANUAL_JOBS = {
-    "resources/historical_rebuild.yml": ("europe_energy_intelligence_historical_rebuild", 318, 5400),
     "resources/historical_bronze_load.yml": ("europe_energy_intelligence_historical_bronze_load", 450, 7200),
 }
 

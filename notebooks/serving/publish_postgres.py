@@ -36,9 +36,8 @@ import os
 from datetime import date
 
 from src.orchestration.processing_window import (
-    DEFAULT_ENTSOE_LOOKBACK_DAYS,
-    VALID_EXECUTION_MODES,
-    resolve_entsoe_window,
+    DEFAULT_LOOKBACK_DAYS,
+    resolve_window,
 )
 from src.transformations.silver_window import date_key_bounds
 from src.serving.postgres_connection import connect, load_connection_config_from_env
@@ -50,17 +49,13 @@ from src.serving.postgres_schema import ALL_TABLE_DDL, INDEX_DDL
 dbutils.widgets.text("gold_catalog", "", "Gold catalog.schema (e.g. main.gold)")
 dbutils.widgets.text("secret_scope", "europe-energy-intelligence", "Databricks secret scope")
 dbutils.widgets.text("secret_key", "POSTGRES_URL", "Databricks secret key")
-dbutils.widgets.dropdown("execution_mode", "daily", list(VALID_EXECUTION_MODES), "Execution mode")
-dbutils.widgets.text("start_date", "", "Start date (reprocess, YYYY-MM-DD)")
-dbutils.widgets.text("end_date", "", "End date (reprocess, YYYY-MM-DD)")
-dbutils.widgets.text(
-    "lookback_days", str(DEFAULT_ENTSOE_LOOKBACK_DAYS), "Daily-mode lookback (days)"
-)
+dbutils.widgets.text("start_date", "", "Start date (YYYY-MM-DD; blank = lookback_days back)")
+dbutils.widgets.text("end_date", "", "End date (YYYY-MM-DD; blank = latest completed date)")
+dbutils.widgets.text("lookback_days", str(DEFAULT_LOOKBACK_DAYS), "Lookback when start_date is blank (days)")
 
 gold_catalog = dbutils.widgets.get("gold_catalog")
 secret_scope = dbutils.widgets.get("secret_scope")
 secret_key = dbutils.widgets.get("secret_key")
-execution_mode = dbutils.widgets.get("execution_mode")
 _start_param = dbutils.widgets.get("start_date")
 _end_param = dbutils.widgets.get("end_date")
 lookback_days = int(dbutils.widgets.get("lookback_days"))
@@ -77,15 +72,13 @@ lookback_days = int(dbutils.widgets.get("lookback_days"))
 # leaves older serving rows stale until a `reprocess` run republishes
 # the affected range — that is what reprocess with an explicit
 # start_date/end_date is for.
-publish_start, publish_end = resolve_entsoe_window(
-    execution_mode,
+publish_start, publish_end = resolve_window(
     start_date=date.fromisoformat(_start_param) if _start_param else None,
     end_date=date.fromisoformat(_end_param) if _end_param else None,
     lookback_days=lookback_days,
 )
 low_date_key, high_date_key = date_key_bounds(publish_start, publish_end)
 
-print(f"Execution mode:  {execution_mode}")
 print(f"Publish window:  {publish_start} to {publish_end} "
       f"(date_key {low_date_key}..{high_date_key})")
 

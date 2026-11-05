@@ -118,32 +118,50 @@ Recent-date reprocessing is part of normal pipeline behaviour.
 
 The workflow should derive a single canonical processing window and pass it to downstream tasks.
 
-Recommended parameters:
+Parameters (as implemented):
 
-- `processing_date`
 - `start_date`
 - `end_date`
-- `execution_mode`
+
+Both optional. A blank `end_date` resolves to the latest completed UTC
+date; a blank `start_date` resolves to the lookback behind that end. The
+schedule ships both blank, so a scheduled run can never span the
+history.
 
 Do not independently calculate date ranges inside every task.
 
 ## Execution Modes
 
-Support at least:
+**There are none.** An earlier revision of this spec recommended an
+`execution_mode` of `daily` or `reprocess`, and it was built that way.
+It was removed on 2026-11-05 because two optional dates already express
+every case it covered:
 
-### daily
+| intent | parameters |
+|---|---|
+| scheduled run | both blank |
+| repair one day onward | `start_date` |
+| bounded range | `start_date` + `end_date` |
+| full history | `start_date=2015-01-01` |
 
-Normal scheduled execution.
+A separate `lookback_days` parameter went with it: it was the same knob
+as `start_date` stated relatively, and the schedule never overrode it,
+so the default width is now the code constant `DEFAULT_LOOKBACK_DAYS`.
 
-Uses the configured recent-date lookback.
+The mode also caused real harm, which is worth recording. It had leaked
+into a decision that was not about dates: the Open-Meteo notebook chose
+its API endpoint from the mode, sending any `reprocess` run to the
+Historical/Archive API. A one-day repair of a date four days old
+therefore queried ERA5, which had not settled it; the task ran for an
+hour against a bounded compute allowance and was killed by its timeout
+without writing a row. Endpoint choice now derives from the date itself
+(`open_meteo_client.select_endpoint`).
 
-### reprocess
-
-Processes an explicitly supplied date or date range for correction/debugging.
-
-The same underlying implementation supports both modes.
-
-Do not maintain separate duplicate pipeline implementations.
+The same underlying implementation serves every window shape. Do not
+maintain separate duplicate pipeline implementations, and do not add a
+second job that is one of this job's task chains with different
+parameter defaults — `bundle run --only <task>+` runs any stage and its
+downstream from the one job.
 
 ## Task DAG
 
@@ -310,14 +328,10 @@ Historical ingestion is out of scope for this workflow. It is a separate layer w
 
 This workflow is responsible only for the recent-date window. The normal 02:00 scheduled run must never process a full historical range.
 
-Where a correction to older dates is needed from this workflow, it is invoked as:
-
-`execution_mode = reprocess`
-
-with supplied:
+Where a correction to older dates is needed from this workflow, it is invoked with an explicit window:
 
 - `start_date`
-- `end_date`
+- `end_date` (optional; blank runs to the latest completed date)
 
 ## Reprocessing
 
@@ -530,7 +544,7 @@ This specification is complete when:
 6. Open-Meteo normal daily execution uses a configurable recent-date lookback (initially three calendar days) against the Forecast API, not the Historical/Archive API; reprocessing of older dates uses the Historical/Archive API.
 6a. The possibility of a small delta appearing later for a recent date's weather (or ENTSO-E) metric, due to lookback reprocessing, is documented for anyone consuming the Gold/dashboard data — not left as a silent, unexplained behavior.
 7. A canonical processing window is passed between tasks.
-8. Daily and reprocess execution modes are supported.
+8. One execution path serves both the scheduled window and an explicit one, selected by the `start_date`/`end_date` parameters rather than by a mode.
 9. Task dependencies enforce correct execution order.
 10. Silver does not run after required ingestion task failure.
 11. dbt does not run after Silver failure.

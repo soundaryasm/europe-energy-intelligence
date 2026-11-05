@@ -47,10 +47,8 @@ from src.transformations.silver_window import (
 )
 from src.transformations.silver_writer import write_silver_table
 from src.orchestration.processing_window import (
-    DEFAULT_ENTSOE_LOOKBACK_DAYS,
-    VALID_EXECUTION_MODES,
-    resolve_entsoe_window,
-    resolve_open_meteo_window,
+    DEFAULT_LOOKBACK_DAYS,
+    resolve_window,
 )
 
 # COMMAND ----------
@@ -60,14 +58,10 @@ from src.orchestration.processing_window import (
 # all twelve years on every run. A `reprocess` run with an explicit
 # range is how the whole history is (re)built — that is the only mode
 # that should ever span years.
-dbutils.widgets.dropdown("execution_mode", "daily", list(VALID_EXECUTION_MODES), "Execution mode")
-dbutils.widgets.text("start_date", "", "Start date (reprocess, YYYY-MM-DD)")
-dbutils.widgets.text("end_date", "", "End date (reprocess, YYYY-MM-DD)")
-dbutils.widgets.text(
-    "lookback_days", str(DEFAULT_ENTSOE_LOOKBACK_DAYS), "Daily-mode lookback (days)"
-)
+dbutils.widgets.text("start_date", "", "Start date (YYYY-MM-DD; blank = lookback_days back)")
+dbutils.widgets.text("end_date", "", "End date (YYYY-MM-DD; blank = latest completed date)")
+dbutils.widgets.text("lookback_days", str(DEFAULT_LOOKBACK_DAYS), "Lookback when start_date is blank (days)")
 
-execution_mode = dbutils.widgets.get("execution_mode")
 _start_param = dbutils.widgets.get("start_date")
 _end_param = dbutils.widgets.get("end_date")
 lookback_days = int(dbutils.widgets.get("lookback_days"))
@@ -77,16 +71,13 @@ explicit_end = date.fromisoformat(_end_param) if _end_param else None
 
 # Resolved per source, matching how ingestion resolves them, so Silver
 # never processes a day the matching ingestion task did not fetch.
-entsoe_start, entsoe_end = resolve_entsoe_window(
-    execution_mode, start_date=explicit_start, end_date=explicit_end,
-    lookback_days=lookback_days,
+# One window for both sources: they share `lookback_days` and always
+# cover the same dates.
+entsoe_start, entsoe_end = resolve_window(
+    start_date=explicit_start, end_date=explicit_end, lookback_days=lookback_days,
 )
-weather_start, weather_end = resolve_open_meteo_window(
-    execution_mode, start_date=explicit_start, end_date=explicit_end,
-    lookback_days=lookback_days,
-)
+weather_start, weather_end = entsoe_start, entsoe_end
 
-print(f"Execution mode:  {execution_mode}")
 print(f"ENTSO-E window:  {entsoe_start} to {entsoe_end}")
 print(f"Weather window:  {weather_start} to {weather_end}")
 
