@@ -1,7 +1,7 @@
 # Daily pipeline job definition (Spec 006).
 #
 # NOT VALIDATED against a real Databricks workspace — see databricks.yml
-# header. Task DAG, schedule, and retry policy follow
+# header. Task DAG and retry policy follow
 # specs/006-daily-orchestration.md; review the `warehouse_id` variable
 # and notebook paths before deploying.
 
@@ -20,15 +20,33 @@ resources:
     europe_energy_intelligence_daily:
       name: "European Energy Intelligence - Daily Pipeline"
 
-      # Run once daily at 02:00 UTC, by explicit choice (2026-09-08) —
-      # every pipeline in this project uses UTC, not local time, even
-      # though this one previously used Europe/Dublin deliberately so
-      # it always fired "2 hours after local midnight" for Silver's
-      # local-calendar-date grain. Trade-off accepted: with fixed UTC,
-      # that local alignment now drifts by an hour between Irish DST
-      # and standard time (02:00 UTC = 03:00 Dublin in summer, 02:00
-      # Dublin in winter) instead of staying fixed at 2 hours past
-      # local midnight year-round.
+      # No `schedule:` block, by explicit choice (2026-11-24). This job
+      # is manual-dispatch only, like a GitHub Actions workflow with
+      # `workflow_dispatch` and no `on.schedule`. Run it with
+      # `databricks bundle run`, the UI, or the Jobs API.
+      #
+      # The nightly trigger lives in Supabase pg_cron, which POSTs to
+      # /api/2.1/jobs/run-now at 02:00 UTC with a scoped PAT. Moved off
+      # Databricks because its scheduler twice stopped firing silently —
+      # `pause_status` still read UNPAUSED, no error, no run record, no
+      # alert. It died after 4 nights (2026-11-10) and again after 8
+      # (2026-11-23). Only a pause/unpause toggle re-armed it; a bundle
+      # deploy is a no-op because Terraform sees no diff. Supabase is not
+      # obviously more reliable, but it logs every attempt, so the same
+      # failure would be visible on day one instead of day five.
+      #
+      # Still 02:00 UTC, by explicit choice (2026-09-08) — every pipeline
+      # in this project uses UTC, not local time, even though this one
+      # previously used Europe/Dublin deliberately so it always fired
+      # "2 hours after local midnight" for Silver's local-calendar-date
+      # grain. Trade-off accepted: with fixed UTC, that local alignment
+      # drifts by an hour between Irish DST and standard time (02:00 UTC
+      # = 03:00 Dublin in summer, 02:00 Dublin in winter) instead of
+      # staying fixed at 2 hours past local midnight year-round.
+      #
+      # A missed night is self-healing: the default window is the last
+      # DEFAULT_LOOKBACK_DAYS completed days, so the next run re-covers
+      # it. Losing one trigger costs nothing.
       # Hard ceiling on the whole run, the backstop the task-level
       # timeouts above cannot provide: they bound one task each, so a
       # bad night could still stack six of them plus their retries.
@@ -38,17 +56,12 @@ resources:
       # beyond that rather than burning the Free Edition allowance.
       timeout_seconds: 2700
 
-      schedule:
-        quartz_cron_expression: "0 0 2 * * ?"
-        timezone_id: "UTC"
-        pause_status: UNPAUSED
-
       # The single canonical processing-window definition (Spec 006
       # "Canonical Processing Window"), passed to every task that needs
       # it rather than each task calculating its own date range.
       #
-      # Two dates, nothing else. Both blank — which is what the schedule
-      # ships — resolves to the last `DEFAULT_LOOKBACK_DAYS` completed
+      # Two dates, nothing else. Both blank — which is what the Supabase
+      # trigger sends — resolves to the last `DEFAULT_LOOKBACK_DAYS` completed
       # days. A manual run overrides either or both:
       #
       #   --params start_date=2026-11-01                  one day to latest

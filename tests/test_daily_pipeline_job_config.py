@@ -37,14 +37,21 @@ def test_job_config_defines_all_expected_tasks():
     assert {task["task_key"] for task in job["tasks"]} == EXPECTED_TASK_KEYS
 
 
-def test_job_schedule_is_02_00_utc():
+def test_job_has_no_schedule_so_supabase_is_the_only_trigger():
+    # Manual dispatch only, like a GitHub Actions workflow with
+    # workflow_dispatch and no on.schedule. The nightly trigger is
+    # Supabase pg_cron POSTing to /api/2.1/jobs/run-now at 02:00 UTC.
+    # A schedule re-added here would double-fire against that cron:
+    # one run starts, the other queues, and the Free Edition allowance
+    # pays for both.
     job = _load_job()
-    assert job["schedule"]["timezone_id"] == "UTC"
-    assert job["schedule"]["quartz_cron_expression"] == "0 0 2 * * ?"
+    assert "schedule" not in job
+    assert "trigger" not in job
+    assert "continuous" not in job
 
 
 def test_job_takes_the_window_as_two_optional_dates():
-    # Both blank is what the schedule ships: the code then resolves the
+    # Both blank is what the Supabase trigger sends: the code then resolves the
     # end to the latest completed UTC date and the start to the trailing
     # lookback. A manual run overrides either or both.
     job = _load_job()
